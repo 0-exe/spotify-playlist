@@ -17,10 +17,8 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - DATABASE_URL=sqlite+aiosqlite:////app/data/spotify_ui.db
     volumes:
-      # Persistent SQLite database (artist weights)
+      # Persistiert sowohl die SQLite-DB als auch den Spotify-OAuth-Cache
       - spotify_data:/app/data
-      # Persistent Spotify OAuth token cache
-      - spotify_cache:/app
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -37,6 +35,4 @@ services:
 
 volumes:
   spotify_data:
-    driver: local
-  spotify_cache:
     driver: local
