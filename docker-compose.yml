@@ -29,8 +29,9 @@ services:
 
 networks:
   heimnetz:
-    driver: macvlan
+    driver: ipvlan
     driver_opts:
+      ipvlan_mode: l2
       parent: ${PARENT_INTERFACE:-eth0}
     ipam:
       config:
