@@ -11,9 +11,7 @@ services:
     environment:
       - SPOTIPY_CLIENT_ID=${SPOTIPY_CLIENT_ID}
       - SPOTIPY_CLIENT_SECRET=${SPOTIPY_CLIENT_SECRET}
-      # WICHTIG: Muss auf deinen Proxmox-Server zeigen, z.B.:
-      # http://192.168.1.50:8000/callback  oder  https://spotify.deine-domain.de/callback
-      - SPOTIPY_REDIRECT_URI=${SPOTIPY_REDIRECT_URI}
+      - SPOTIPY_REDIRECT_URI=${SPOTIPY_REDIRECT_URI:-http://192.168.178.222:8000/callback}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - DATABASE_URL=sqlite+aiosqlite:////app/data/spotify_ui.db
     volumes:
@@ -25,6 +23,19 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+    networks:
+      heimnetz:
+        ipv4_address: 192.168.178.222
+
+networks:
+  heimnetz:
+    driver: macvlan
+    driver_opts:
+      parent: ${PARENT_INTERFACE:-eth0}
+    ipam:
+      config:
+        - subnet: 192.168.178.0/24
+          gateway: 192.168.178.1
 
 volumes:
   spotify_data:
