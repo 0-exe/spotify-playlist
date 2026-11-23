@@ -16,18 +16,18 @@ logger = logging.getLogger(__name__)
 def _cache_path() -> str:
     settings = get_settings()
     path = settings.spotify_cache_path
-    # Ensure parent directory exists (data/ folder)
     os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
     return path
 
 
-def get_spotify_oauth() -> SpotifyOAuth:
-    """Create a SpotifyOAuth manager."""
+def get_spotify_oauth(redirect_uri: str | None = None) -> SpotifyOAuth:
+    """Create a SpotifyOAuth manager with optional dynamic redirect_uri."""
     settings = get_settings()
+    uri = redirect_uri.strip() if redirect_uri and redirect_uri.strip() else settings.spotipy_redirect_uri
     return SpotifyOAuth(
         client_id=settings.spotipy_client_id,
         client_secret=settings.spotipy_client_secret,
-        redirect_uri=settings.spotipy_redirect_uri,
+        redirect_uri=uri,
         scope=settings.spotify_scopes,
         cache_path=_cache_path(),
         open_browser=False,
@@ -60,9 +60,6 @@ def inject_token_from_url(callback_url: str) -> bool:
     """
     Headless Docker fallback: parse a full callback URL and exchange the code
     for a token, caching it for future requests.
-
-    Useful when Docker runs on Proxmox-LAN-IP but the browser redirects to
-    127.0.0.1 — user copies the full redirect URL and pastes it here.
     """
     try:
         auth_manager = get_spotify_oauth()

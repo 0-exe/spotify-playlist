@@ -1,4 +1,4 @@
-"""Auth router — extended with headless OAuth fallback."""
+"""Auth router — supports dynamic multi-domain callbacks (IP, DuckDNS, Local Domain) + headless OAuth."""
 import logging
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
@@ -12,16 +12,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def detect_redirect_uri(request: Request) -> str:
+    """
+    Dynamically detect the caller's redirect URI (supports Nginx Proxy Manager,
+    direct IP, DuckDNS, and custom local domains).
+    """
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if host:
+        return f"{proto}://{host}/callback"
+    return get_settings().spotipy_redirect_uri
+
+
 @router.get("/login")
-async def login():
-    """Redirect user to Spotify authorization page."""
+async def login(request: Request):
+    """Redirect user to Spotify authorization page using dynamic callback URL."""
     settings = get_settings()
     if not settings.spotipy_client_id or not settings.spotipy_client_secret:
         raise HTTPException(
             status_code=503,
             detail="Spotify credentials not configured. Set SPOTIPY_CLIENT_ID and SPOTIPY_CLIENT_SECRET in .env",
         )
-    auth_manager = get_spotify_oauth()
+    redirect_uri = detect_redirect_uri(request)
+    auth_manager = get_spotify_oauth(redirect_uri=redirect_uri)
     auth_url = auth_manager.get_authorize_url()
     return RedirectResponse(url=auth_url)
 
@@ -34,7 +47,8 @@ async def callback(request: Request, code: str = None, error: str = None):
     if not code:
         raise HTTPException(status_code=400, detail="No authorization code received")
 
-    auth_manager = get_spotify_oauth()
+    redirect_uri = detect_redirect_uri(request)
+    auth_manager = get_spotify_oauth(redirect_uri=redirect_uri)
     token_info = auth_manager.get_access_token(code)
     if not token_info:
         raise HTTPException(status_code=400, detail="Failed to get access token")
@@ -79,11 +93,7 @@ class ManualTokenRequest(BaseModel):
 async def manual_token(request: ManualTokenRequest):
     """
     Headless Docker fallback: accepts a full Spotify callback URL
-    (e.g. http://localhost:8000/callback?code=...) and exchanges the code
-    for a token.
-
-    Use this when Docker runs on Proxmox-LAN-IP but Spotify redirects to
-    localhost/127.0.0.1 — just paste the full redirect URL here.
+    and exchanges the code for a token.
     """
     success = inject_token_from_url(request.callback_url)
     if not success:
