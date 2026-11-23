@@ -11,7 +11,9 @@ services:
     environment:
       - SPOTIPY_CLIENT_ID=${SPOTIPY_CLIENT_ID}
       - SPOTIPY_CLIENT_SECRET=${SPOTIPY_CLIENT_SECRET}
-      - SPOTIPY_REDIRECT_URI=${SPOTIPY_REDIRECT_URI:-http://192.168.178.199:8000/callback}
+      # Wird von Nginx Proxy Manager / DuckDNS / Domain angesteuert, z.B.:
+      # https://deinedomain.duckdns.org/callback  oder  http://spotify.home/callback
+      - SPOTIPY_REDIRECT_URI=${SPOTIPY_REDIRECT_URI}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - DATABASE_URL=sqlite+aiosqlite:////app/data/spotify_ui.db
     volumes:
@@ -23,20 +25,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
-    networks:
-      heimnetz:
-        ipv4_address: 192.168.178.199
-
-networks:
-  heimnetz:
-    driver: ipvlan
-    driver_opts:
-      ipvlan_mode: l2
-      parent: ${PARENT_INTERFACE:-eth0}
-    ipam:
-      config:
-        - subnet: 192.168.178.0/24
-          gateway: 192.168.178.1
 
 volumes:
   spotify_data:
