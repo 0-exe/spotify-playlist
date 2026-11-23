@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Spotify AI Playlist Generator</title>
+  <title>Spotify AI Playlist & Power-User Suite</title>
   <link rel="stylesheet" href="/static/style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
@@ -14,141 +14,469 @@
     <div class="header-inner">
       <div class="logo">
         <svg width="28" height="28" viewBox="0 0 24 24" fill="#1db954"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
-        <span>AI Playlist</span>
+        <span>AI Playlist <span class="tag-pro">Power-User</span></span>
       </div>
-      <nav class="nav" id="nav">
-        <div id="auth-section">
-          <!-- Filled by JS -->
-        </div>
+
+      <!-- Mode Tabs -->
+      <nav class="nav-tabs">
+        <button class="tab-btn active" data-tab="tab-generator">✨ AI Generator</button>
+        <button class="tab-btn" data-tab="tab-mixer">🔀 Playlist-Mixer</button>
+        <button class="tab-btn" data-tab="tab-inspector">🔍 Playlist Inspector</button>
+        <button class="tab-btn" data-tab="tab-settings">⚙️ Settings & Auth</button>
       </nav>
+
+      <div class="nav-auth" id="auth-section">
+        <!-- Filled by JS -->
+      </div>
     </div>
   </header>
 
-  <!-- Error banner (shown when API keys missing) -->
+  <!-- Configuration Warning Banner -->
   <div class="banner banner-warning" id="config-warning" style="display:none">
-    ⚠️ <strong>Setup required:</strong> Configure your API keys in <code>.env</code> and restart the server.
-    <a href="/docs" target="_blank">View API docs</a>
+    ⚠️ <strong>Konfiguration erforderlich:</strong> API-Keys in <code>.env</code> prüfen.
+    <a href="/docs" target="_blank">API Docs</a>
   </div>
 
-  <main class="main">
-    <!-- Left Panel: Controls -->
-    <aside class="sidebar">
-      <section class="card">
-        <h2 class="card-title">🎭 Mood & Vibe</h2>
-        <div class="form-group">
-          <label for="prompt-input">Describe your playlist</label>
-          <textarea
-            id="prompt-input"
-            class="input textarea"
-            placeholder="e.g. White Girl Music 2010s Throwback, Dark Driving Techno, Chill Acoustic Morning..."
-            rows="3"
-          ></textarea>
-        </div>
+  <!-- Headless Docker OAuth Helper Banner -->
+  <div class="banner banner-info" id="oauth-helper-banner" style="display:none">
+    ℹ️ <strong>Headless Docker Login?</strong> Falls Spotify nach dem Login auf <code>localhost</code> weiterleitet, kopiere die komplette Adresszeile und füge sie unter <em>Settings & Auth</em> ein.
+  </div>
 
-        <div class="form-row">
-          <div class="form-group">
-            <label for="limit-input">Tracks</label>
-            <input type="number" id="limit-input" class="input" value="40" min="5" max="100" />
+  <main class="main-container">
+
+    <!-- ============================================================== -->
+    <!-- TAB 1: AI GENERATOR (Global Spotify Search)                     -->
+    <!-- ============================================================== -->
+    <section class="tab-content active" id="tab-generator">
+      <div class="main-layout">
+        <!-- Left Sidebar -->
+        <aside class="sidebar">
+          <section class="card">
+            <h2 class="card-title">🎭 Mood & Vibe Suche</h2>
+            <div class="form-group">
+              <label for="prompt-input">Prompt eingeben</label>
+              <textarea
+                id="prompt-input"
+                class="input textarea"
+                placeholder="z. B. White Girl Music 2010s Throwback, Dark Driving Techno, Chill Acoustic Morning..."
+                rows="3"
+              ></textarea>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="limit-input">Songs</label>
+                <input type="number" id="limit-input" class="input" value="40" min="5" max="100" />
+              </div>
+              <div class="form-group">
+                <label for="sort-mode">Sortier-Modus</label>
+                <select id="sort-mode" class="input select">
+                  <option value="popularity">🔥 Popularity (Standard)</option>
+                  <option value="balanced">⚖️ Balanced (Max 3/Artist)</option>
+                  <option value="hidden_gems">💎 Hidden Gems (&lt; 55 Pop)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="playlist-name">Playlist Name <span class="muted">(optional)</span></label>
+              <input type="text" id="playlist-name" class="input" placeholder="Automatisch aus Prompt" />
+            </div>
+          </section>
+
+          <section class="card">
+            <h2 class="card-title">🔊 Playback & Device</h2>
+            <div class="form-group">
+              <label>Spotify Connect Gerät</label>
+              <div class="device-row">
+                <select id="device-select" class="input select">
+                  <option value="">— Gerät wählen —</option>
+                </select>
+                <button class="btn btn-icon" id="refresh-devices" title="Geräte aktualisieren">↻</button>
+              </div>
+            </div>
+            <label class="checkbox-label">
+              <input type="checkbox" id="start-playback" />
+              <span>Nach Erstellung direkt abspielen</span>
+            </label>
+          </section>
+
+          <section class="card">
+            <h2 class="card-title">🎚️ Gespeicherte Artist-Gewichtungen</h2>
+            <p class="muted small">0.0 = Hard-Ban | 0.1–0.4 = Soft-Ban | 1.0 = Normal | 1.5–2.0 = Boost</p>
+            <div id="artist-weights-list" class="weights-list">
+              <p class="muted small center">Noch keine Gewichtungen gespeichert.</p>
+            </div>
+          </section>
+
+          <div class="action-row">
+            <button class="btn btn-primary btn-lg" id="generate-btn">
+              <span class="btn-icon">✨</span> Playlist generieren
+            </button>
+            <button class="btn btn-secondary" id="create-spotify-btn" disabled>
+              <span class="btn-icon">➕</span> In Spotify speichern
+            </button>
           </div>
-          <div class="form-group">
-            <label for="sort-mode">Sort Mode</label>
-            <select id="sort-mode" class="input select">
-              <option value="popularity">🔥 Popularity</option>
-              <option value="balanced">⚖️ Balanced</option>
-              <option value="hidden_gems">💎 Hidden Gems</option>
-            </select>
+        </aside>
+
+        <!-- Right Content -->
+        <section class="content">
+          <div class="empty-state" id="empty-state">
+            <div class="empty-icon">🎵</div>
+            <h3>Deine Playlist erscheint hier</h3>
+            <p class="muted">Gib einen Mood-Prompt ein und klicke auf <strong>Playlist generieren</strong>.</p>
           </div>
-        </div>
 
-        <div class="form-group">
-          <label for="playlist-name">Playlist Name <span class="muted">(optional)</span></label>
-          <input type="text" id="playlist-name" class="input" placeholder="Auto-generated from prompt" />
-        </div>
-      </section>
-
-      <section class="card">
-        <h2 class="card-title">🔊 Playback</h2>
-        <div class="form-group">
-          <label>Spotify Connect Device</label>
-          <div class="device-row">
-            <select id="device-select" class="input select">
-              <option value="">— Select device —</option>
-            </select>
-            <button class="btn btn-icon" id="refresh-devices" title="Refresh devices">↻</button>
+          <div class="loading-state" id="loading-state" style="display:none">
+            <div class="spinner"></div>
+            <p id="loading-main">Gemini KI analysiert den Mood...</p>
+            <p class="muted small" id="loading-sub">Spotify wird durchsucht...</p>
           </div>
-        </div>
-        <label class="checkbox-label">
-          <input type="checkbox" id="start-playback" />
-          <span>Start playback after creating playlist</span>
-        </label>
-      </section>
 
-      <section class="card">
-        <h2 class="card-title">🎚️ Artist Weights</h2>
-        <p class="muted small">Adjust how much an artist appears. 0 = banned, 2 = boosted.</p>
-        <div id="artist-weights-list" class="weights-list">
-          <p class="muted small center">No saved weights yet. Use sliders in preview.</p>
-        </div>
-      </section>
+          <div id="results-section" style="display:none">
+            <div class="results-header">
+              <div>
+                <h2 id="results-title">Vorschau</h2>
+                <p class="muted small" id="results-meta"></p>
+              </div>
+              <div class="results-actions">
+                <span class="badge" id="mood-badge"></span>
+              </div>
+            </div>
 
-      <div class="action-row">
-        <button class="btn btn-primary btn-lg" id="generate-btn">
-          <span class="btn-icon">✨</span> Generate Playlist
-        </button>
-        <button class="btn btn-secondary" id="create-spotify-btn" disabled>
-          <span class="btn-icon">➕</span> Save to Spotify
-        </button>
+            <details class="strategy-details" id="strategy-details">
+              <summary>🧠 KI-Suchstrategie & Tags anzeigen</summary>
+              <div id="strategy-content" class="strategy-content"></div>
+            </details>
+
+            <div id="track-list" class="track-list"></div>
+
+            <div id="playlist-created" class="playlist-created" style="display:none">
+              <span class="success-icon">✅</span>
+              <span id="playlist-created-text"></span>
+              <a id="playlist-link" href="#" target="_blank" class="btn btn-sm">In Spotify öffnen</a>
+            </div>
+          </div>
+        </section>
       </div>
-    </aside>
+    </section>
 
-    <!-- Right Panel: Results -->
-    <section class="content">
-      <!-- Empty state -->
-      <div class="empty-state" id="empty-state">
-        <div class="empty-icon">🎵</div>
-        <h3>Your playlist will appear here</h3>
-        <p class="muted">Enter a mood or vibe and click <strong>Generate Playlist</strong></p>
-      </div>
 
-      <!-- Loading state -->
-      <div class="loading-state" id="loading-state" style="display:none">
-        <div class="spinner"></div>
-        <p>Asking Gemini AI for search strategies...</p>
-        <p class="muted small" id="loading-sub">Searching Spotify tracks and playlists...</p>
-      </div>
+    <!-- ============================================================== -->
+    <!-- TAB 2: PLAYLIST-MIXER & MOOD-EXTRAKTOR                          -->
+    <!-- ============================================================== -->
+    <section class="tab-content" id="tab-mixer" style="display:none">
+      <div class="main-layout">
+        <!-- Sidebar Controls -->
+        <aside class="sidebar">
+          <section class="card">
+            <h2 class="card-title">📚 Quellen auswählen</h2>
+            <div class="form-group">
+              <label class="checkbox-label bold">
+                <input type="checkbox" id="mixer-include-liked" />
+                <span>❤️ Lieblingssongs (Liked Songs)</span>
+              </label>
+            </div>
+            <label class="small muted">Eigene Playlists (Mehrfachauswahl möglich):</label>
+            <div class="playlist-checklist-wrap">
+              <div class="search-mini">
+                <input type="text" id="mixer-search-pl" class="input input-sm" placeholder="Playlists filtern..." />
+              </div>
+              <div id="mixer-playlists-list" class="playlist-checklist">
+                <p class="muted small center">Lade Playlists...</p>
+              </div>
+            </div>
+            <button class="btn btn-secondary btn-sm full-width mt-2" id="mixer-refresh-pl">🔄 Playlists neu laden</button>
+          </section>
 
-      <!-- Results -->
-      <div id="results-section" style="display:none">
-        <div class="results-header">
-          <div>
-            <h2 id="results-title">Playlist Preview</h2>
-            <p class="muted small" id="results-meta"></p>
+          <section class="card">
+            <h2 class="card-title">🎯 Ziel-Mood & Vorfilter</h2>
+            <div class="form-group">
+              <label for="mixer-prompt">Ziel-Vibe / Mood-Prompt</label>
+              <textarea id="mixer-prompt" class="input textarea" rows="2" placeholder="z. B. Nur die coolen Banger, keine langweiligen Lückenfüller, 90s/2000s Pop..."></textarea>
+            </div>
+
+            <div class="form-group">
+              <label for="mixer-min-pop">Mindest-Popularity: <strong id="val-mixer-min-pop">50</strong></label>
+              <input type="range" id="mixer-min-pop" min="0" max="90" step="5" value="50" class="input-range" />
+              <p class="muted small">Filtert unpopuläre Songs vorab aus.</p>
+            </div>
+
+            <div class="form-group">
+              <label for="mixer-min-vibe">KI-Vibe-Score Schwelle: <strong id="val-mixer-min-vibe">5.5</strong>/10</label>
+              <input type="range" id="mixer-min-vibe" min="0" max="9" step="0.5" value="5.5" class="input-range" />
+              <p class="muted small">Gemini bewertet 0–10. Songs darunter fliegen raus.</p>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="mixer-limit">Max Songs</label>
+                <input type="number" id="mixer-limit" class="input" value="40" min="5" max="150" />
+              </div>
+              <div class="form-group">
+                <label for="mixer-sort">Sortierung</label>
+                <select id="mixer-sort" class="input select">
+                  <option value="popularity">Kombiniert (Score)</option>
+                  <option value="balanced">Balanced (Max 3/Artist)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="mixer-target-name">Ziel-Playlist Name</label>
+              <input type="text" id="mixer-target-name" class="input" placeholder="z. B. Best of Mixer 2024" />
+            </div>
+
+            <label class="checkbox-label mb-2">
+              <input type="checkbox" id="mixer-use-ai" checked />
+              <span>Gemini 2.5 Batch-Vibe-Scoring nutzen</span>
+            </label>
+            <label class="checkbox-label mb-2">
+              <input type="checkbox" id="mixer-start-play" />
+              <span>Direkt abspielen (aktives Gerät)</span>
+            </label>
+          </section>
+
+          <div class="action-row">
+            <button class="btn btn-primary btn-lg" id="mixer-run-btn">
+              <span class="btn-icon">🔀</span> Playlists mergen & filtern
+            </button>
           </div>
-          <div class="results-actions">
-            <span class="badge" id="mood-badge"></span>
+        </aside>
+
+        <!-- Right Content: Mixer Results -->
+        <section class="content">
+          <div class="empty-state" id="mixer-empty-state">
+            <div class="empty-icon">🔀</div>
+            <h3>Playlist-Mixer & Mood-Extraktor</h3>
+            <p class="muted">Wähle links Quellen aus, setze die Filter und lasse Gemini die besten Songs heraussuchen.</p>
+          </div>
+
+          <div class="loading-state" id="mixer-loading-state" style="display:none">
+            <div class="spinner"></div>
+            <p id="mixer-loading-title">Lade Songs aus Quellen...</p>
+            <p class="muted small" id="mixer-loading-sub">Gemini bewertet Tracks im Batch...</p>
+          </div>
+
+          <div id="mixer-results" style="display:none">
+            <div class="results-header">
+              <div>
+                <h2 id="mixer-results-title">Gemergte Playlist</h2>
+                <p class="muted small" id="mixer-results-stats"></p>
+              </div>
+              <div class="results-actions">
+                <button class="btn btn-primary btn-sm" id="mixer-save-spotify-btn">💾 In Spotify anlegen</button>
+              </div>
+            </div>
+
+            <div id="mixer-track-list" class="track-list"></div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+
+    <!-- ============================================================== -->
+    <!-- TAB 3: PLAYLIST INSPECTOR (Bearbeiten / Filtern)                 -->
+    <!-- ============================================================== -->
+    <section class="tab-content" id="tab-inspector" style="display:none">
+      <div class="inspector-container">
+        <!-- Top Controls Bar -->
+        <div class="card inspector-toolbar">
+          <div class="toolbar-row">
+            <div class="form-group flex-2">
+              <label>Zu untersuchende Playlist</label>
+              <div class="device-row">
+                <select id="insp-playlist-select" class="input select">
+                  <option value="">— Playlist wählen —</option>
+                </select>
+                <button class="btn btn-icon" id="insp-refresh-btn" title="Aktualisieren">↻</button>
+              </div>
+            </div>
+
+            <div class="form-group flex-2">
+              <label>Live-Suche (Song, Artist, Album)</label>
+              <input type="text" id="insp-query" class="input" placeholder="Sofort filtern..." />
+            </div>
+
+            <div class="form-group">
+              <label>Mindest-Popularity: <strong id="val-insp-min-pop">0</strong></label>
+              <input type="range" id="insp-min-pop" min="0" max="100" step="5" value="0" class="input-range" />
+            </div>
+
+            <div class="form-group">
+              <label>Release-Jahre</label>
+              <div class="range-inputs">
+                <input type="number" id="insp-year-from" class="input input-sm" placeholder="Von (1990)" min="1950" max="2030" />
+                <span class="muted">–</span>
+                <input type="number" id="insp-year-to" class="input input-sm" placeholder="Bis (2025)" min="1950" max="2030" />
+              </div>
+            </div>
+          </div>
+
+          <div class="toolbar-row mt-2">
+            <div class="form-group flex-2">
+              <label>Artist-Gewichtung Filter</label>
+              <select id="insp-weight-filter" class="input select">
+                <option value="">Alle Artists</option>
+                <option value="soft_banned">⚠️ Nur Soft-Banned Artists (0.1–0.4)</option>
+                <option value="banned">⛔ Nur Hard-Banned Artists (0.0)</option>
+                <option value="boosted">⭐ Nur Geboostete Artists (&gt; 1.0)</option>
+                <option value="normal">Normale Artists (1.0)</option>
+              </select>
+            </div>
+
+            <div class="form-group flex-2">
+              <label>Sortieren nach</label>
+              <select id="insp-sort-by" class="input select">
+                <option value="popularity">🔥 Popularity (absteigend)</option>
+                <option value="release_date">📅 Release-Datum (neueste zuerst)</option>
+                <option value="artist_weight">🎚️ Artist-Gewichtung</option>
+                <option value="name">🔤 Songname (A-Z)</option>
+                <option value="artist">🎤 Artist (A-Z)</option>
+                <option value="vibe_score">🧠 KI-Vibe Score</option>
+              </select>
+            </div>
+
+            <div class="form-group flex-3">
+              <label>Optionaler KI-Mood Filter (Gemini)</label>
+              <div class="device-row">
+                <input type="text" id="insp-mood-prompt" class="input" placeholder="z. B. Melancholic & Deep..." />
+                <button class="btn btn-secondary btn-sm" id="insp-apply-ai-btn">AI Score</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bulk Actions Bar -->
+          <div class="toolbar-actions mt-3">
+            <div class="left-actions">
+              <span class="badge" id="insp-count-badge">0 Songs</span>
+              <button class="btn btn-secondary btn-sm" id="insp-check-dupes-btn">🔍 Duplikate finden</button>
+              <button class="btn btn-secondary btn-sm" id="insp-apply-reorder-btn" title="Aktuelle Sortierung auf Spotify übertragen">
+                💾 Reihenfolge auf Spotify speichern
+              </button>
+            </div>
+            <div class="right-actions">
+              <button class="btn btn-danger btn-sm" id="insp-remove-filtered-btn" disabled>
+                🗑️ Gefilterte Songs entfernen (<span id="insp-remove-count">0</span>)
+              </button>
+              <button class="btn btn-primary btn-sm" id="insp-save-as-new-btn">
+                ✨ Als neue Sub-Playlist abzweigen
+              </button>
+            </div>
           </div>
         </div>
 
-        <!-- AI Strategy info -->
-        <details class="strategy-details" id="strategy-details">
-          <summary>🧠 AI Search Strategy</summary>
-          <div id="strategy-content" class="strategy-content"></div>
-        </details>
+        <!-- Track List / Inspector Table -->
+        <div class="inspector-results">
+          <div class="empty-state" id="insp-empty-state">
+            <div class="empty-icon">🔍</div>
+            <h3>Wähle oben eine Playlist aus</h3>
+            <p class="muted">Filtern, Duplikate bereinigen, Artists bewerten und Reihenfolge neu organisieren.</p>
+          </div>
 
-        <!-- Track list -->
-        <div id="track-list" class="track-list"></div>
+          <div class="loading-state" id="insp-loading-state" style="display:none">
+            <div class="spinner"></div>
+            <p>Lade Playlist-Daten von Spotify...</p>
+          </div>
 
-        <!-- Playlist created confirmation -->
-        <div id="playlist-created" class="playlist-created" style="display:none">
-          <span class="success-icon">✅</span>
-          <span id="playlist-created-text"></span>
-          <a id="playlist-link" href="#" target="_blank" class="btn btn-sm">Open in Spotify</a>
+          <div id="insp-track-table-wrap" style="display:none">
+            <div class="table-header-row">
+              <span class="th-num">#</span>
+              <span class="th-cover">Cover</span>
+              <span class="th-title">Titel & Artist</span>
+              <span class="th-year">Jahr</span>
+              <span class="th-pop">Popularity</span>
+              <span class="th-weight">Artist-Status & Quick-Action</span>
+              <span class="th-actions">Links</span>
+            </div>
+            <div id="insp-track-list" class="track-list"></div>
+          </div>
         </div>
       </div>
     </section>
+
+
+    <!-- ============================================================== -->
+    <!-- TAB 4: SETTINGS & DOCKER OAUTH HELPER                           -->
+    <!-- ============================================================== -->
+    <section class="tab-content" id="tab-settings" style="display:none">
+      <div class="settings-wrap">
+        <div class="card">
+          <h2 class="card-title">🔐 Headless Docker OAuth Fix (Proxmox-Betrieb)</h2>
+          <p class="muted mb-2">
+            Wenn die App im Docker auf deinem Proxmox-Server läuft (z. B. unter <code>http://192.168.1.50:8000</code>), 
+            leitet Spotify dich im Browser evtl. auf <code>http://localhost:8000/callback?code=...</code> weiter und der Browser meldet "Seite nicht gefunden".
+          </p>
+          <div class="info-box mb-3">
+            <strong>So geht's:</strong>
+            <ol class="styled-list">
+              <li>Klicke auf <a href="/login" class="text-accent underline" target="_blank">Spotify Login starten</a>.</li>
+              <li>Wenn der Browser auf die Fehlermeldung springt, <strong>kopiere die komplette URL aus deiner Browser-Adressleiste</strong>.</li>
+              <li>Füge die URL unten ein und klicke auf <strong>Token manuell übertragen</strong>:</li>
+            </ol>
+          </div>
+
+          <div class="form-group">
+            <label for="manual-callback-url">Vollständige Callback-URL einfügen</label>
+            <input
+              type="text"
+              id="manual-callback-url"
+              class="input"
+              placeholder="http://localhost:8000/callback?code=AQD...&state=..."
+            />
+          </div>
+          <button class="btn btn-primary" id="submit-manual-token">🔑 Token manuell übertragen</button>
+        </div>
+
+        <div class="card mt-3">
+          <h2 class="card-title">📡 Home Assistant Integration</h2>
+          <p class="muted mb-2">Fertig vorkonfigurierte Aufrufe für deine <code>configuration.yaml</code>:</p>
+          <pre class="code-block"><code>rest_command:
+  spotify_merge_playlists:
+    url: "http://&lt;PROXMOX_IP&gt;:8000/api/merge-playlists"
+    method: POST
+    content_type: "application/json"
+    payload: &gt;
+      {
+        "prompt": "Party Hits 2000s Banger",
+        "playlist_names": ["Summer Vibes", "Party"],
+        "include_liked_songs": true,
+        "min_popularity": 60,
+        "min_vibe_score": 6.5,
+        "limit": 40,
+        "create_on_spotify": true,
+        "device_name": "Living Room Speaker",
+        "start_playback_after": true
+      }</code></pre>
+          <p class="muted small mt-2">Eine vollständige Vorlage mit Beispiel-Automationen findest du in <code>home_assistant_examples.yaml</code> im Projektverzeichnis.</p>
+        </div>
+      </div>
+    </section>
+
   </main>
 
-  <!-- Toast notifications -->
+  <!-- Modal: Sub-Playlist anlegen -->
+  <div class="modal-backdrop" id="subplaylist-modal" style="display:none">
+    <div class="modal-card">
+      <h3 class="modal-title">Sub-Playlist abzweigen</h3>
+      <p class="muted small mb-3">Erstellt eine neue Spotify-Playlist aus den aktuell gefilterten Songs (<span id="modal-song-count">0</span> Tracks).</p>
+      <div class="form-group">
+        <label for="modal-playlist-name">Name der neuen Playlist</label>
+        <input type="text" id="modal-playlist-name" class="input" placeholder="z. B. Inspector Selection" />
+      </div>
+      <div class="form-group">
+        <label for="modal-playlist-desc">Beschreibung</label>
+        <input type="text" id="modal-playlist-desc" class="input" placeholder="Gefiltert mit Spotify AI Inspector" />
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="modal-cancel-btn">Abbrechen</button>
+        <button class="btn btn-primary" id="modal-confirm-btn">In Spotify anlegen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
 
   <script src="/static/app.js"></script>

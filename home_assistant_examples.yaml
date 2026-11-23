@@ -1,0 +1,103 @@
+# Home Assistant Integration Examples
+# Für Proxmox / Docker Setup mit Spotify AI Playlist Generator
+
+# 1. In configuration.yaml einbinden:
+# ==================================
+# rest_command: !include rest_commands.yaml
+# (oder direkt unter rest_command:)
+
+rest_command:
+  # Standard: KI Playlist aus freiem Prompt generieren (Globale Spotify-Suche)
+  spotify_generate_ai_playlist:
+    url: "http://<PROXMOX_DOCKER_IP>:8000/api/generate"
+    method: POST
+    content_type: "application/json"
+    timeout: 60
+    payload: >
+      {
+        "prompt": "{{ prompt | default('Chill Driving Vibes') }}",
+        "limit": {{ limit | default(40) }},
+        "sort_mode": "{{ sort_mode | default('popularity') }}",
+        "create_on_spotify": {{ create_on_spotify | default(true) }},
+        "playlist_name": "{{ playlist_name | default('HA AI: ' ~ prompt[:25]) }}",
+        "device_name": "{{ device_name | default('') }}",
+        "start_playback": {{ start_playback | default(false) }}
+      }
+
+  # Power-User: Multi-Playlist Merge & Mood-Filterung (z.B. 2 Playlists oder Liked Songs)
+  spotify_merge_playlists:
+    url: "http://<PROXMOX_DOCKER_IP>:8000/api/merge-playlists"
+    method: POST
+    content_type: "application/json"
+    timeout: 120
+    payload: >
+      {
+        "prompt": "{{ prompt | default('Uplifting Banger') }}",
+        "playlist_names": {{ playlist_names | default(["Party 2024", "Summer Vibes"]) | to_json }},
+        "include_liked_songs": {{ include_liked_songs | default(false) }},
+        "min_popularity": {{ min_popularity | default(55) }},
+        "min_vibe_score": {{ min_vibe_score | default(6.0) }},
+        "limit": {{ limit | default(35) }},
+        "sort_mode": "popularity",
+        "create_on_spotify": {{ create_on_spotify | default(true) }},
+        "target_playlist_name": "{{ target_playlist_name | default('HA Merge: ' ~ prompt[:25]) }}",
+        "device_name": "{{ device_name | default('') }}",
+        "start_playback_after": {{ start_playback_after | default(true) }},
+        "use_ai_scoring": true
+      }
+
+
+# ==============================================================================
+# 2. Beispiel-Automationen (automations.yaml)
+# ==============================================================================
+
+# Beispiel 1: Morgen-Vibe beim Betreten des Wohnzimmers (Wochentags)
+automation_example_morning_vibe:
+  alias: "Spotify AI: Guten Morgen Acoustic Flow"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.wohnzimmer_motion
+      to: "on"
+  condition:
+    - condition: time
+      after: "07:00:00"
+      before: "09:30:00"
+      weekday:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+  action:
+    - service: rest_command.spotify_generate_ai_playlist
+      data:
+        prompt: "Acoustic Morning Coffee Chill, Warm and Relaxed"
+        limit: 30
+        sort_mode: "balanced"
+        create_on_spotify: true
+        playlist_name: "☕ Morgen Kaffee AI"
+        device_name: "Wohnzimmer Speaker"
+        start_playback: true
+
+# Beispiel 2: Party-Modus Schalter triggert Best-Of Merge aus Lieblingssongs & Party-Playlist
+automation_example_party_merge:
+  alias: "Spotify AI: Party Booster Merge"
+  trigger:
+    - platform: state
+      entity_id: input_boolean.party_mode
+      to: "on"
+  action:
+    - service: rest_command.spotify_merge_playlists
+      data:
+        prompt: "High Energy Dance Pop, Hits only, keine langsamen Balladen"
+        playlist_names:
+          - "Favorites"
+          - "Festival 2024"
+        include_liked_songs: true
+        min_popularity: 65
+        min_vibe_score: 7.0
+        limit: 50
+        create_on_spotify: true
+        target_playlist_name: "🎉 Tonight's Party Mix"
+        device_name: "NVIDIA SHIELD"
+        start_playback_after: true

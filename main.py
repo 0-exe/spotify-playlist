@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import init_db
-from app.routers import auth, playlist, artists, devices
+from app.routers import auth, playlist, artists, devices, library, inspect
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,9 +49,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Spotify AI Playlist Generator",
-    description="Generate mood-based playlists using Gemini AI and Spotify",
-    version="1.0.0",
+    title="Spotify AI Playlist Generator & Power-User Suite",
+    description="Generate, mix, and inspect Spotify playlists using Gemini AI and Spotipy",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -70,6 +70,8 @@ templates = Jinja2Templates(directory="app/templates")
 # Include routers
 app.include_router(auth.router, tags=["auth"])
 app.include_router(playlist.router, prefix="/api", tags=["playlist"])
+app.include_router(library.router, prefix="/api", tags=["library"])
+app.include_router(inspect.router, prefix="/api", tags=["inspect"])
 app.include_router(artists.router, prefix="/api", tags=["artists"])
 app.include_router(devices.router, prefix="/api", tags=["devices"])
 

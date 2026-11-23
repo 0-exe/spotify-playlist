@@ -19,13 +19,18 @@ class Settings(BaseSettings):
     app_port: int = 8000
     database_url: str = "sqlite+aiosqlite:///./data/spotify_ui.db"
     
-    # Spotify OAuth scopes
+    # Spotify OAuth scopes (extended for Library & Playlist Power-User mode)
     spotify_scopes: str = (
         "user-read-private user-read-email "
         "playlist-modify-public playlist-modify-private "
+        "playlist-read-private playlist-read-collaborative "
+        "user-library-read "
         "user-read-playback-state user-modify-playback-state "
         "streaming"
     )
+    
+    # Docker / Proxmox: cache path inside the mounted volume
+    spotify_cache_path: str = "data/.spotify_cache"
 
 
 @lru_cache

@@ -1,9 +1,21 @@
 /* =====================================================
-   Spotify AI Playlist Generator — Main App JS
+   Spotify AI Playlist Generator & Power-User Suite
+   Frontend JavaScript (Vanilla ES6)
    ===================================================== */
 
 const API = {
   authStatus: () => fetch('/api/auth/status').then(r => r.json()),
+  manualToken: (url) => fetch('/api/auth/manual-token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callback_url: url }),
+  }).then(async r => {
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: r.statusText }));
+      throw new Error(err.detail || 'Fehler beim Token-Austausch');
+    }
+    return r.json();
+  }),
   devices: () => fetch('/api/devices').then(r => r.json()),
   generate: (body) => fetch('/api/generate', {
     method: 'POST',
@@ -16,6 +28,58 @@ const API = {
     }
     return r.json();
   }),
+  userPlaylists: () => fetch('/api/library/playlists').then(async r => {
+    if (!r.ok) throw new Error('Konnte Playlists nicht laden');
+    return r.json();
+  }),
+  mergePlaylists: (body) => fetch('/api/merge-playlists', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(async r => {
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: r.statusText }));
+      throw new Error(err.detail || 'Merge failed');
+    }
+    return r.json();
+  }),
+  inspectFilter: (body) => fetch('/api/inspect/filter', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(async r => {
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: r.statusText }));
+      throw new Error(err.detail || 'Filter failed');
+    }
+    return r.json();
+  }),
+  inspectDuplicates: (playlistId, apply = false) => fetch('/api/inspect/duplicates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playlist_id: playlistId, apply }),
+  }).then(r => r.json()),
+  inspectReorder: (playlistId, trackUris, sortBy, mood = '') => fetch('/api/inspect/reorder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playlist_id: playlistId, track_uris: trackUris, sort_by: sortBy, mood_for_vibe: mood }),
+  }).then(r => r.json()),
+  inspectBulkRemove: (playlistId, trackUris) => fetch('/api/inspect/bulk-remove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playlist_id: playlistId, track_uris: trackUris }),
+  }).then(r => r.json()),
+  inspectSaveAsNew: (body) => fetch('/api/inspect/save-as-new', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(async r => {
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: r.statusText }));
+      throw new Error(err.detail || 'Speichern fehlgeschlagen');
+    }
+    return r.json();
+  }),
   setWeight: (artistId, artistName, weight) => fetch('/api/artists/weights', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -25,40 +89,103 @@ const API = {
   listWeights: () => fetch('/api/artists/weights').then(r => r.json()),
 };
 
-// ---- State ----
+// State
+let userPlaylistsCache = [];
+let artistWeights = {}; // artist_id -> float
 let currentTracks = [];
 let currentStrategy = {};
-let artistWeights = {}; // artistId -> weight
-let pendingWeightUpdates = {}; // artistId -> {name, weight}
-let isGenerating = false;
+let mixerCurrentTracks = [];
+let inspectorTracks = [];
+let inspectorCurrentPlaylistId = '';
 
-// ---- DOM refs ----
 const $ = id => document.getElementById(id);
-const promptInput   = $('prompt-input');
-const limitInput    = $('limit-input');
-const sortMode      = $('sort-mode');
-const playlistName  = $('playlist-name');
-const deviceSelect  = $('device-select');
-const startPlayback = $('start-playback');
-const generateBtn   = $('generate-btn');
-const createBtn     = $('create-spotify-btn');
-const refreshDevBtn = $('refresh-devices');
-const emptyState    = $('empty-state');
-const loadingState  = $('loading-state');
-const resultsSection = $('results-section');
-const trackList     = $('track-list');
-const weightsList   = $('artist-weights-list');
 
-// ---- Init ----
+// ─────────────────────────────────────────────
+// Init
+// ─────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+  setupTabs();
+  setupRangeDisplays();
   await checkConfig();
-  await Promise.all([checkAuth(), loadWeights(), refreshDevices()]);
+  await checkAuth();
+  await loadWeights();
+  await refreshDevices();
 
-  generateBtn.addEventListener('click', onGenerate);
-  createBtn.addEventListener('click', () => onCreateSpotify(false));
-  refreshDevBtn.addEventListener('click', refreshDevices);
+  // Generator Tab Listeners
+  $('generate-btn').addEventListener('click', onGenerate);
+  $('create-spotify-btn').addEventListener('click', () => onCreateSpotify(false));
+  $('refresh-devices').addEventListener('click', refreshDevices);
+
+  // Mixer Tab Listeners
+  $('mixer-refresh-pl').addEventListener('click', loadMixerPlaylists);
+  $('mixer-search-pl').addEventListener('input', filterMixerPlaylists);
+  $('mixer-run-btn').addEventListener('click', onRunMixer);
+  $('mixer-save-spotify-btn').addEventListener('click', onSaveMixerToSpotify);
+
+  // Inspector Tab Listeners
+  $('insp-playlist-select').addEventListener('change', onInspectorPlaylistChange);
+  $('insp-refresh-btn').addEventListener('click', loadInspectorPlaylists);
+  $('insp-query').addEventListener('input', debounceInspectFilter);
+  $('insp-min-pop').addEventListener('input', debounceInspectFilter);
+  $('insp-year-from').addEventListener('input', debounceInspectFilter);
+  $('insp-year-to').addEventListener('input', debounceInspectFilter);
+  $('insp-weight-filter').addEventListener('change', debounceInspectFilter);
+  $('insp-sort-by').addEventListener('change', debounceInspectFilter);
+  $('insp-apply-ai-btn').addEventListener('click', () => runInspectFilter(true));
+  $('insp-check-dupes-btn').addEventListener('click', onCheckDuplicates);
+  $('insp-apply-reorder-btn').addEventListener('click', onReorderSpotify);
+  $('insp-remove-filtered-btn').addEventListener('click', onBulkRemoveFiltered);
+  $('insp-save-as-new-btn').addEventListener('click', openSubPlaylistModal);
+
+  // Modal Listeners
+  $('modal-cancel-btn').addEventListener('click', () => $('subplaylist-modal').style.display = 'none');
+  $('modal-confirm-btn').addEventListener('click', onConfirmSaveAsNew);
+
+  // Settings / Manual OAuth
+  $('submit-manual-token').addEventListener('click', onSubmitManualToken);
 });
 
+// ─────────────────────────────────────────────
+// Tabs Navigation
+// ─────────────────────────────────────────────
+function setupTabs() {
+  const tabs = document.querySelectorAll('.tab-btn');
+  tabs.forEach(btn => {
+    btn.addEventListener('click', () => {
+      tabs.forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+      btn.classList.add('active');
+      const target = $(btn.dataset.tab);
+      if (target) {
+        target.style.display = 'block';
+        if (btn.dataset.tab === 'tab-mixer' && userPlaylistsCache.length === 0) {
+          loadMixerPlaylists();
+        } else if (btn.dataset.tab === 'tab-inspector' && $('insp-playlist-select').options.length <= 1) {
+          loadInspectorPlaylists();
+        }
+      }
+    });
+  });
+}
+
+function setupRangeDisplays() {
+  const binds = [
+    { input: 'mixer-min-pop', label: 'val-mixer-min-pop' },
+    { input: 'mixer-min-vibe', label: 'val-mixer-min-vibe' },
+    { input: 'insp-min-pop', label: 'val-insp-min-pop' },
+  ];
+  binds.forEach(b => {
+    const el = $(b.input);
+    const lbl = $(b.label);
+    if (el && lbl) {
+      el.addEventListener('input', () => { lbl.textContent = el.value; });
+    }
+  });
+}
+
+// ─────────────────────────────────────────────
+// Auth & Health
+// ─────────────────────────────────────────────
 async function checkConfig() {
   const r = await fetch('/health').then(r => r.json()).catch(() => ({}));
   if (!r.spotify_configured || !r.gemini_configured) {
@@ -76,37 +203,50 @@ async function checkAuth() {
         <span>${escHtml(user.display_name || user.id)}</span>
         <a href="/logout" class="muted small" style="margin-left:4px">Log out</a>
       </div>`;
+    $('oauth-helper-banner').style.display = 'none';
   } else {
     section.innerHTML = `<a href="/login" class="btn btn-login btn-sm">Connect Spotify</a>`;
+    $('oauth-helper-banner').style.display = 'flex';
+  }
+}
+
+async function onSubmitManualToken() {
+  const url = $('manual-callback-url').value.trim();
+  if (!url) { toast('Bitte URL eingeben', 'error'); return; }
+  try {
+    const res = await API.manualToken(url);
+    toast(res.message || 'Erfolgreich verbunden!', 'success');
+    $('manual-callback-url').value = '';
+    await checkAuth();
+    await refreshDevices();
+  } catch (e) {
+    toast(`Fehler: ${e.message}`, 'error');
   }
 }
 
 async function refreshDevices() {
-  refreshDevBtn.textContent = '⟳';
+  const btn = $('refresh-devices');
+  if (btn) btn.textContent = '⟳';
   try {
     const { devices } = await API.devices();
-    deviceSelect.innerHTML = '<option value="">— Select device —</option>';
+    const sel = $('device-select');
+    sel.innerHTML = '<option value="">— Gerät wählen —</option>';
     (devices || []).forEach(d => {
       const opt = document.createElement('option');
       opt.value = d.name;
-      opt.textContent = `${deviceIcon(d.type)} ${d.name}${d.is_active ? ' ●' : ''}`;
+      opt.textContent = `${d.type === 'Computer' ? '💻' : d.type === 'Smartphone' ? '📱' : '🔊'} ${d.name}${d.is_active ? ' ●' : ''}`;
       if (d.is_active) opt.selected = true;
-      deviceSelect.appendChild(opt);
+      sel.appendChild(opt);
     });
-    if (!devices || devices.length === 0) {
-      deviceSelect.innerHTML = '<option value="">No devices found — open Spotify first</option>';
-    }
   } catch (e) {
-    deviceSelect.innerHTML = '<option value="">Not authenticated</option>';
+    $('device-select').innerHTML = '<option value="">Nicht verbunden</option>';
   }
-  refreshDevBtn.textContent = '↻';
+  if (btn) btn.textContent = '↻';
 }
 
-function deviceIcon(type) {
-  const icons = { Computer: '💻', Smartphone: '📱', Speaker: '🔊', TV: '📺', CastAudio: '🔊' };
-  return icons[type] || '🎵';
-}
-
+// ─────────────────────────────────────────────
+// Artist Weights Management
+// ─────────────────────────────────────────────
 async function loadWeights() {
   try {
     const list = await API.listWeights();
@@ -114,21 +254,22 @@ async function loadWeights() {
     list.forEach(w => { artistWeights[w.artist_id] = w.weight; });
     renderWeightsList(list);
   } catch (e) {
-    console.warn('Could not load weights:', e);
+    console.warn('Weights load error:', e);
   }
 }
 
 function renderWeightsList(list) {
+  const el = $('artist-weights-list');
   if (!list || list.length === 0) {
-    weightsList.innerHTML = '<p class="muted small center">No saved weights yet. Use sliders in preview.</p>';
+    el.innerHTML = '<p class="muted small center">Noch keine Gewichtungen gespeichert.</p>';
     return;
   }
-  weightsList.innerHTML = list.map(w => `
+  el.innerHTML = list.map(w => `
     <div class="weight-item" data-id="${w.artist_id}">
       <span class="artist-name" title="${escHtml(w.artist_name)}">${escHtml(w.artist_name)}</span>
       <input type="range" min="0" max="2" step="0.1" value="${w.weight}"
         oninput="onSidebarWeightChange('${w.artist_id}', '${escHtml(w.artist_name)}', this)" />
-      <span class="weight-badge ${w.weight === 0 ? 'banned' : w.weight > 1 ? 'boosted' : ''}">${w.weight.toFixed(1)}</span>
+      <span class="mini-badge ${w.weight === 0 ? 'banned' : w.weight < 0.5 ? 'soft' : w.weight > 1 ? 'boosted' : ''}">${w.weight.toFixed(1)}</span>
       <button class="btn-icon" onclick="onDeleteWeight('${w.artist_id}')" title="Reset">✕</button>
     </div>
   `).join('');
@@ -136,314 +277,522 @@ function renderWeightsList(list) {
 
 async function onSidebarWeightChange(artistId, artistName, input) {
   const weight = parseFloat(input.value);
-  const badge = input.closest('.weight-item').querySelector('.weight-badge');
-  badge.textContent = weight.toFixed(1);
-  badge.className = 'weight-badge' + (weight === 0 ? ' banned' : weight > 1 ? ' boosted' : '');
-
   artistWeights[artistId] = weight;
-  pendingWeightUpdates[artistId] = { name: artistName, weight };
-  debounceRecalc();
+  await API.setWeight(artistId, artistName, weight);
+  await loadWeights();
+  if (currentTracks.length) recalcGeneratorClientSide();
+  if (inspectorTracks.length) debounceInspectFilter();
 }
 
 async function onDeleteWeight(artistId) {
   await API.deleteWeight(artistId);
   delete artistWeights[artistId];
   await loadWeights();
-  if (currentTracks.length) recalcAndRender();
+  if (currentTracks.length) recalcGeneratorClientSide();
+  if (inspectorTracks.length) debounceInspectFilter();
 }
 
-// ---- Generate ----
+async function quickSetArtistWeight(artistId, artistName, weight) {
+  artistWeights[artistId] = weight;
+  await API.setWeight(artistId, artistName, weight);
+  toast(`${artistName}: Gewicht ${weight}`, 'info');
+  await loadWeights();
+  if (currentTracks.length) recalcGeneratorClientSide();
+  if (inspectorTracks.length) debounceInspectFilter();
+}
+
+// ─────────────────────────────────────────────
+// TAB 1: AI GENERATOR
+// ─────────────────────────────────────────────
 async function onGenerate() {
-  const prompt = promptInput.value.trim();
-  if (!prompt) { toast('Enter a mood or vibe description', 'error'); return; }
-  if (isGenerating) return;
+  const prompt = $('prompt-input').value.trim();
+  if (!prompt) { toast('Bitte Mood-Prompt eingeben', 'error'); return; }
 
-  // Flush pending weight updates before generating
-  await flushWeightUpdates();
-
-  isGenerating = true;
-  generateBtn.disabled = true;
-  generateBtn.innerHTML = '<span class="btn-icon">⟳</span> Generating...';
-  emptyState.style.display = 'none';
-  loadingState.style.display = 'flex';
-  resultsSection.style.display = 'none';
+  const btn = $('generate-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="btn-icon">⟳</span> Analysiere...';
+  $('empty-state').style.display = 'none';
+  $('loading-state').style.display = 'flex';
+  $('results-section').style.display = 'none';
   $('playlist-created').style.display = 'none';
-
-  const loadingSub = $('loading-sub');
-  const steps = [
-    'Asking Gemini AI for search strategies...',
-    'Searching Spotify tracks and playlists...',
-    'Applying mood filters and scoring...',
-    'Almost there...',
-  ];
-  let stepIdx = 0;
-  const stepInterval = setInterval(() => {
-    stepIdx = (stepIdx + 1) % steps.length;
-    loadingSub.textContent = steps[stepIdx];
-  }, 2200);
 
   try {
     const result = await API.generate({
       prompt,
-      limit: parseInt(limitInput.value) || 40,
-      sort_mode: sortMode.value,
+      limit: parseInt($('limit-input').value) || 40,
+      sort_mode: $('sort-mode').value,
       create_on_spotify: false,
       playlist_name: '',
-      device_name: deviceSelect.value,
+      device_name: $('device-select').value,
       start_playback: false,
     });
-
-    clearInterval(stepInterval);
     currentTracks = result.tracks;
     currentStrategy = result.search_strategy;
-    renderResults(result);
-    createBtn.disabled = false;
-    toast(`Found ${result.tracks.length} tracks!`, 'success');
+    renderGeneratorResults(result);
+    $('create-spotify-btn').disabled = false;
+    toast(`Gefunden: ${result.tracks.length} Songs!`, 'success');
   } catch (e) {
-    clearInterval(stepInterval);
-    toast(`Error: ${e.message}`, 'error');
-    emptyState.style.display = 'flex';
+    toast(`Fehler: ${e.message}`, 'error');
+    $('empty-state').style.display = 'flex';
   } finally {
-    isGenerating = false;
-    generateBtn.disabled = false;
-    generateBtn.innerHTML = '<span class="btn-icon">✨</span> Generate Playlist';
-    loadingState.style.display = 'none';
+    btn.disabled = false;
+    btn.innerHTML = '<span class="btn-icon">✨</span> Playlist generieren';
+    $('loading-state').style.display = 'none';
   }
 }
 
-async function onCreateSpotify(startPlay) {
+async function onCreateSpotify() {
   if (!currentTracks.length) return;
-  await flushWeightUpdates();
-
-  createBtn.disabled = true;
-  createBtn.innerHTML = '<span class="btn-icon">⟳</span> Creating...';
+  const btn = $('create-spotify-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="btn-icon">⟳</span> Speichere...';
 
   try {
+    const prompt = $('prompt-input').value.trim();
     const result = await API.generate({
-      prompt: promptInput.value.trim(),
-      limit: parseInt(limitInput.value) || 40,
-      sort_mode: sortMode.value,
+      prompt,
+      limit: parseInt($('limit-input').value) || 40,
+      sort_mode: $('sort-mode').value,
       create_on_spotify: true,
-      playlist_name: playlistName.value.trim() || `🎵 ${promptInput.value.trim().slice(0, 40)}`,
-      device_name: deviceSelect.value,
-      start_playback: startPlayback.checked,
+      playlist_name: $('playlist-name').value.trim() || `🎵 ${prompt.slice(0, 35)}`,
+      device_name: $('device-select').value,
+      start_playback: $('start-playback').checked,
     });
-
     if (result.playlist) {
-      const pl = result.playlist;
       $('playlist-created').style.display = 'flex';
-      $('playlist-created-text').textContent =
-        `Playlist "${pl.name}" created with ${pl.tracks_added} tracks.`;
-      $('playlist-link').href = pl.url;
-      toast('Playlist saved to Spotify! ✅', 'success');
+      $('playlist-created-text').textContent = `Playlist "${result.playlist.name}" mit ${result.playlist.tracks_added} Songs erstellt!`;
+      $('playlist-link').href = result.playlist.url;
+      toast('In Spotify gespeichert! ✅', 'success');
     }
-
-    currentTracks = result.tracks;
-    renderResults(result);
   } catch (e) {
-    toast(`Error: ${e.message}`, 'error');
+    toast(`Fehler: ${e.message}`, 'error');
   } finally {
-    createBtn.disabled = false;
-    createBtn.innerHTML = '<span class="btn-icon">➕</span> Save to Spotify';
+    btn.disabled = false;
+    btn.innerHTML = '<span class="btn-icon">➕</span> In Spotify speichern';
   }
 }
 
-// ---- Render ----
-function renderResults(result) {
-  loadingState.style.display = 'none';
-  resultsSection.style.display = 'block';
-
-  $('results-title').textContent = playlistName.value.trim() || `🎵 ${promptInput.value.trim().slice(0, 40)}`;
-  $('results-meta').textContent =
-    `${result.tracks.length} tracks · ${result.total_found} found · sorted by ${sortMode.options[sortMode.selectedIndex].text}`;
+function renderGeneratorResults(result) {
+  $('results-section').style.display = 'block';
+  $('results-title').textContent = $('playlist-name').value.trim() || `🎵 ${$('prompt-input').value.trim().slice(0, 35)}`;
+  $('results-meta').textContent = `${result.tracks.length} Songs · ${result.total_found} durchsucht · Modus: ${$('sort-mode').value}`;
   $('mood-badge').textContent = result.mood_description || '';
 
-  // Strategy tags
   const strategy = result.search_strategy || {};
   const tags = [
     ...(strategy.genres || []).map(g => `🎸 ${g}`),
     ...(strategy.decade_tags || []).map(d => `📅 ${d}`),
     `⚡ ${strategy.energy_level || 'medium'}`,
   ];
-  $('strategy-content').innerHTML = tags.map(t =>
-    `<span class="strategy-tag">${escHtml(t)}</span>`
-  ).join('');
-
-  renderTrackList(result.tracks);
+  $('strategy-content').innerHTML = tags.map(t => `<span class="strategy-tag">${escHtml(t)}</span>`).join('');
+  renderTrackList($('track-list'), result.tracks);
 }
 
-function renderTrackList(tracks) {
-  trackList.innerHTML = tracks.map((t, i) => {
-    const w = t.artist_weight ?? artistWeights[t.artist_id] ?? 1.0;
-    const popPct = Math.round(t.popularity);
-    const scoreLabel = `${Math.round(t.final_score ?? t.popularity)}`;
-    const badgeClass = w === 0 ? ' banned' : w > 1.0 ? ' boosted' : '';
+function recalcGeneratorClientSide() {
+  if (!currentTracks.length) return;
+  const limit = parseInt($('limit-input').value) || 40;
+  const mode = $('sort-mode').value;
+
+  const annotated = currentTracks.map(t => ({
+    ...t,
+    artist_weight: artistWeights[t.artist_id] ?? 1.0,
+    final_score: t.popularity * (artistWeights[t.artist_id] ?? 1.0),
+  })).filter(t => t.artist_weight > 0);
+
+  if (mode === 'hidden_gems') {
+    annotated.sort((a, b) => (b.popularity < 55 ? b.final_score : 0) - (a.popularity < 55 ? a.final_score : 0));
+  } else {
+    annotated.sort((a, b) => b.final_score - a.final_score);
+  }
+
+  const counts = {};
+  const result = [];
+  for (const t of annotated) {
+    const c = counts[t.artist_id] || 0;
+    const cap = t.artist_weight < 0.5 ? 2 : (mode === 'balanced' ? 3 : limit);
+    if (t.artist_weight < 0.5 && t.popularity < 70 && c >= 1) continue;
+    if (c >= cap) continue;
+    result.push(t);
+    counts[t.artist_id] = c + 1;
+    if (result.length >= limit) break;
+  }
+  currentTracks = result;
+  renderTrackList($('track-list'), result);
+}
+
+// ─────────────────────────────────────────────
+// TAB 2: PLAYLIST-MIXER
+// ─────────────────────────────────────────────
+async function loadMixerPlaylists() {
+  const container = $('mixer-playlists-list');
+  container.innerHTML = '<p class="muted small center">Lade Playlists von Spotify...</p>';
+  try {
+    const res = await API.userPlaylists();
+    userPlaylistsCache = res.playlists || [];
+    renderMixerPlaylistChecklist(userPlaylistsCache);
+  } catch (e) {
+    container.innerHTML = `<p class="muted small center">Fehler: ${e.message}</p>`;
+  }
+}
+
+function renderMixerPlaylistChecklist(playlists) {
+  const container = $('mixer-playlists-list');
+  if (!playlists.length) {
+    container.innerHTML = '<p class="muted small center">Keine Playlists gefunden</p>';
+    return;
+  }
+  container.innerHTML = playlists.map(pl => `
+    <label class="pl-item" title="${escHtml(pl.name)} (${pl.track_count} Songs)">
+      <input type="checkbox" class="mixer-pl-cb" value="${pl.id}" data-name="${escHtml(pl.name)}" />
+      ${pl.image ? `<img class="pl-item-cover" src="${pl.image}" alt="" />` : '<div class="pl-item-cover"></div>'}
+      <div class="pl-item-info">
+        <div>${escHtml(pl.name)}</div>
+        <div class="pl-item-meta">${pl.track_count} Songs · ${escHtml(pl.owner)}</div>
+      </div>
+    </label>
+  `).join('');
+}
+
+function filterMixerPlaylists() {
+  const q = $('mixer-search-pl').value.toLowerCase();
+  const filtered = userPlaylistsCache.filter(p => p.name.toLowerCase().includes(q));
+  renderMixerPlaylistChecklist(filtered);
+}
+
+async function onRunMixer() {
+  const prompt = $('mixer-prompt').value.trim();
+  if (!prompt) { toast('Bitte Ziel-Vibe/Mood eingeben', 'error'); return; }
+
+  const selectedIds = Array.from(document.querySelectorAll('.mixer-pl-cb:checked')).map(cb => cb.value);
+  const includeLiked = $('mixer-include-liked').checked;
+
+  if (selectedIds.length === 0 && !includeLiked) {
+    toast('Wähle mindestens 1 Playlist oder "Liked Songs" als Quelle aus', 'error');
+    return;
+  }
+
+  $('mixer-empty-state').style.display = 'none';
+  $('mixer-loading-state').style.display = 'flex';
+  $('mixer-results').style.display = 'none';
+  $('mixer-run-btn').disabled = true;
+
+  try {
+    const body = {
+      prompt,
+      playlist_ids: selectedIds,
+      include_liked_songs: includeLiked,
+      min_popularity: parseInt($('mixer-min-pop').value) || 0,
+      min_vibe_score: parseFloat($('mixer-min-vibe').value) || 0.0,
+      limit: parseInt($('mixer-limit').value) || 40,
+      sort_mode: $('mixer-sort').value,
+      create_on_spotify: false,
+      use_ai_scoring: $('mixer-use-ai').checked,
+    };
+    const res = await API.mergePlaylists(body);
+    mixerCurrentTracks = res.tracks;
+    $('mixer-results-title').textContent = $('mixer-target-name').value.trim() || `Mixer: ${prompt.slice(0, 30)}`;
+    $('mixer-results-stats').textContent = `${res.tracks.length} finale Songs (aus ${res.total_candidates} Gesamtsongs, ${res.after_popularity_filter} nach Vorfilter)`;
+    renderTrackList($('mixer-track-list'), res.tracks);
+    $('mixer-results').style.display = 'block';
+    toast(`Merge erfolgreich: ${res.tracks.length} Banger gefunden!`, 'success');
+  } catch (e) {
+    toast(`Merge-Fehler: ${e.message}`, 'error');
+    $('mixer-empty-state').style.display = 'flex';
+  } finally {
+    $('mixer-loading-state').style.display = 'none';
+    $('mixer-run-btn').disabled = false;
+  }
+}
+
+async function onSaveMixerToSpotify() {
+  if (!mixerCurrentTracks.length) return;
+  const prompt = $('mixer-prompt').value.trim();
+  const name = $('mixer-target-name').value.trim() || `Mixer: ${prompt.slice(0, 30)}`;
+  const selectedIds = Array.from(document.querySelectorAll('.mixer-pl-cb:checked')).map(cb => cb.value);
+
+  const btn = $('mixer-save-spotify-btn');
+  btn.disabled = true;
+  btn.textContent = 'Speichere...';
+
+  try {
+    const res = await API.mergePlaylists({
+      prompt,
+      playlist_ids: selectedIds,
+      include_liked_songs: $('mixer-include-liked').checked,
+      min_popularity: parseInt($('mixer-min-pop').value) || 0,
+      min_vibe_score: parseFloat($('mixer-min-vibe').value) || 0.0,
+      limit: parseInt($('mixer-limit').value) || 40,
+      sort_mode: $('mixer-sort').value,
+      create_on_spotify: true,
+      target_playlist_name: name,
+      start_playback_after: $('mixer-start-play').checked,
+      use_ai_scoring: false, // already scored
+    });
+    if (res.playlist) {
+      toast(`Playlist "${res.playlist.name}" in Spotify angelegt! ✅`, 'success');
+      window.open(res.playlist.url, '_blank');
+    }
+  } catch (e) {
+    toast(`Fehler: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 In Spotify anlegen';
+  }
+}
+
+// ─────────────────────────────────────────────
+// TAB 3: PLAYLIST INSPECTOR
+// ─────────────────────────────────────────────
+async function loadInspectorPlaylists() {
+  const sel = $('insp-playlist-select');
+  sel.innerHTML = '<option value="">Lade Playlists...</option>';
+  try {
+    const res = await API.userPlaylists();
+    userPlaylistsCache = res.playlists || [];
+    sel.innerHTML = '<option value="">— Playlist wählen —</option>';
+    userPlaylistsCache.forEach(pl => {
+      const opt = document.createElement('option');
+      opt.value = pl.id;
+      opt.textContent = `${pl.name} (${pl.track_count} Songs)`;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    sel.innerHTML = '<option value="">Fehler beim Laden</option>';
+  }
+}
+
+function onInspectorPlaylistChange() {
+  inspectorCurrentPlaylistId = $('insp-playlist-select').value;
+  if (!inspectorCurrentPlaylistId) {
+    $('insp-empty-state').style.display = 'flex';
+    $('insp-track-table-wrap').style.display = 'none';
+    return;
+  }
+  runInspectFilter(false);
+}
+
+let filterTimer = null;
+function debounceInspectFilter() {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => runInspectFilter(false), 250);
+}
+
+async function runInspectFilter(applyAI = false) {
+  if (!inspectorCurrentPlaylistId) return;
+
+  $('insp-loading-state').style.display = 'flex';
+  $('insp-empty-state').style.display = 'none';
+
+  const body = {
+    playlist_id: inspectorCurrentPlaylistId,
+    query: $('insp-query').value.trim(),
+    min_popularity: parseInt($('insp-min-pop').value) || 0,
+    max_popularity: 100,
+    year_from: parseInt($('insp-year-from').value) || 0,
+    year_to: parseInt($('insp-year-to').value) || 9999,
+    weight_filter: $('insp-weight-filter').value,
+    sort_by: $('insp-sort-by').value,
+    mood_for_vibe: applyAI ? $('insp-mood-prompt').value.trim() : '',
+    limit: 300,
+  };
+
+  try {
+    const res = await API.inspectFilter(body);
+    inspectorTracks = res.tracks;
+    renderInspectorList(res.tracks);
+    $('insp-count-badge').textContent = `${res.total} Songs`;
+    $('insp-remove-count').textContent = res.total;
+    $('insp-remove-filtered-btn').disabled = res.total === 0;
+    $('insp-track-table-wrap').style.display = 'block';
+  } catch (e) {
+    toast(`Fehler: ${e.message}`, 'error');
+  } finally {
+    $('insp-loading-state').style.display = 'none';
+  }
+}
+
+function renderInspectorList(tracks) {
+  const container = $('insp-track-list');
+  if (!tracks.length) {
+    container.innerHTML = '<p class="muted center p-4">Keine Songs entsprechen den aktuellen Filtern.</p>';
+    return;
+  }
+  container.innerHTML = tracks.map((t, idx) => {
+    const w = artistWeights[t.artist_id] ?? t.artist_weight ?? 1.0;
+    const isBanned = w === 0.0;
+    const isSoft = w > 0 && w < 0.5;
+    const isBoosted = w > 1.0;
     return `
-    <div class="track-item" data-track-id="${t.id}" data-artist-id="${t.artist_id}" data-artist-name="${escHtml(t.artist_name)}">
-      <span class="track-num">${i + 1}</span>
-      ${t.album_image
-        ? `<img class="track-cover" src="${t.album_image}" alt="" loading="lazy" />`
-        : `<div class="track-cover-placeholder">🎵</div>`}
+    <div class="track-item inspector-row" data-id="${t.id}" data-uri="${t.uri}">
+      <span class="track-num">${idx + 1}</span>
+      ${t.album_image ? `<img class="track-cover" src="${t.album_image}" alt="" />` : '<div class="track-cover-placeholder">🎵</div>'}
       <div class="track-info">
         <div class="track-name" title="${escHtml(t.name)}">${escHtml(t.name)}</div>
         <div class="track-artist">${escHtml(t.artist_name)}</div>
-        ${t.preview_url
-          ? `<audio src="${t.preview_url}" preload="none" style="display:none" id="preview-${t.id}"></audio>
-             <button class="btn-icon" style="font-size:11px;padding:2px 6px;margin-top:3px" onclick="togglePreview('${t.id}')" title="Preview">▶</button>`
-          : ''}
+        ${t.vibe_score ? `<span class="vibe-tag">Vibe: ${t.vibe_score.toFixed(1)}/10</span>` : ''}
       </div>
+      <span class="track-year">${t.release_year || '–'}</span>
       <div class="track-meta">
-        <div class="popularity-bar" title="Popularity: ${popPct}">
-          <div class="popularity-fill" style="width:${popPct}%"></div>
-        </div>
-        <span class="track-score">${popPct} pop · ${scoreLabel} score</span>
+        <div class="popularity-bar"><div class="popularity-fill" style="width:${t.popularity}%"></div></div>
+        <span class="track-score">${t.popularity} pop</span>
       </div>
-      <div class="track-weight-col">
-        <input type="range" min="0" max="2" step="0.1" value="${w.toFixed(1)}"
-          oninput="onTrackWeightChange(this, '${t.artist_id}', '${escHtml(t.artist_name)}')"
-          title="Artist weight for ${escHtml(t.artist_name)}" />
-        <span class="mini-badge${badgeClass}" id="wb-${t.artist_id.replace(/[^a-z0-9]/gi, '_')}">${w.toFixed(1)}</span>
-        ${t.spotify_url
-          ? `<a href="${t.spotify_url}" target="_blank" class="btn-icon" style="font-size:11px;padding:3px 7px" title="Open in Spotify">↗</a>`
-          : ''}
+      <div class="artist-quick-btns">
+        <button class="quick-btn ${isBanned ? 'active-ban' : ''}" onclick="quickSetArtistWeight('${t.artist_id}', '${escHtml(t.artist_name)}', 0.0)" title="Hard-Ban">⛔ 0</button>
+        <button class="quick-btn ${isSoft ? 'active-soft' : ''}" onclick="quickSetArtistWeight('${t.artist_id}', '${escHtml(t.artist_name)}', 0.3)" title="Soft-Ban">⚠️ Soft</button>
+        <button class="quick-btn ${w === 1.0 ? 'active-normal' : ''}" onclick="quickSetArtistWeight('${t.artist_id}', '${escHtml(t.artist_name)}', 1.0)" title="Normal">1.0</button>
+        <button class="quick-btn ${isBoosted ? 'active-boost' : ''}" onclick="quickSetArtistWeight('${t.artist_id}', '${escHtml(t.artist_name)}', 1.8)" title="Boost">⭐ 1.8</button>
+      </div>
+      <div>
+        ${t.spotify_url ? `<a href="${t.spotify_url}" target="_blank" class="btn-icon" title="In Spotify öffnen">↗</a>` : ''}
       </div>
     </div>`;
   }).join('');
 }
 
-// ---- Track weight slider (in preview list) ----
-let recalcTimer = null;
+async function onCheckDuplicates() {
+  if (!inspectorCurrentPlaylistId) { toast('Wähle zuerst eine Playlist', 'error'); return; }
+  const btn = $('insp-check-dupes-btn');
+  btn.disabled = true;
+  btn.textContent = 'Suche Duplikate...';
 
-function onTrackWeightChange(input, artistId, artistName) {
-  const weight = parseFloat(input.value);
-  artistWeights[artistId] = weight;
-  pendingWeightUpdates[artistId] = { name: artistName, weight };
-
-  // Update all badges for this artist across the list
-  document.querySelectorAll(`[data-artist-id="${artistId}"] input[type=range]`).forEach(el => {
-    el.value = weight.toFixed(1);
-  });
-  const safeId = artistId.replace(/[^a-z0-9]/gi, '_');
-  document.querySelectorAll(`#wb-${safeId}`).forEach(el => {
-    el.textContent = weight.toFixed(1);
-    el.className = 'mini-badge' + (weight === 0 ? ' banned' : weight > 1 ? ' boosted' : '');
-  });
-
-  // Also update sidebar sliders if visible
-  const sidebarSlider = document.querySelector(`.weight-item[data-id="${artistId}"] input`);
-  if (sidebarSlider) {
-    sidebarSlider.value = weight.toFixed(1);
-    const badge = sidebarSlider.closest('.weight-item').querySelector('.weight-badge');
-    if (badge) {
-      badge.textContent = weight.toFixed(1);
-      badge.className = 'weight-badge' + (weight === 0 ? ' banned' : weight > 1 ? ' boosted' : '');
+  try {
+    const res = await API.inspectDuplicates(inspectorCurrentPlaylistId, false);
+    if (res.duplicate_count === 0) {
+      toast('Keine Duplikate gefunden! Alles sauber. 🎉', 'success');
+    } else {
+      if (confirm(`${res.duplicate_count} Duplikate gefunden! Sollen diese jetzt automatisch aus der Playlist auf Spotify entfernt werden?`)) {
+        await API.inspectDuplicates(inspectorCurrentPlaylistId, true);
+        toast(`${res.duplicate_count} Duplikate entfernt! ✅`, 'success');
+        runInspectFilter(false);
+      }
     }
+  } catch (e) {
+    toast(`Fehler: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 Duplikate finden';
   }
-
-  debounceRecalc();
 }
 
-function debounceRecalc() {
-  clearTimeout(recalcTimer);
-  recalcTimer = setTimeout(recalcAndRender, 800);
+async function onReorderSpotify() {
+  if (!inspectorCurrentPlaylistId) return;
+  if (!confirm(`Soll die Playlist auf Spotify gemäß der aktuellen Sortierung ("${$('insp-sort-by').value}") dauerhaft neu geordnet werden?`)) return;
+
+  const btn = $('insp-apply-reorder-btn');
+  btn.disabled = true;
+  btn.textContent = 'Speichere Reihenfolge...';
+
+  try {
+    const uris = inspectorTracks.map(t => t.uri);
+    const res = await API.inspectReorder(inspectorCurrentPlaylistId, uris, $('insp-sort-by').value);
+    if (res.success) {
+      toast('Reihenfolge auf Spotify erfolgreich aktualisiert! ✅', 'success');
+    } else {
+      toast('Reihenfolge konnte nicht gespeichert werden.', 'error');
+    }
+  } catch (e) {
+    toast(`Fehler: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 Reihenfolge auf Spotify speichern';
+  }
 }
 
-async function recalcAndRender() {
-  if (!currentTracks.length) return;
-  await flushWeightUpdates();
-  
-  // Re-request generate with updated weights (server will re-score from cached results isn't possible,
-  // so we do client-side recalc for instant feedback)
-  const limit = parseInt(limitInput.value) || 40;
-  const mode = sortMode.value;
-  const recalculated = clientSideRecalc(currentTracks, artistWeights, mode, limit);
-  renderTrackList(recalculated);
-  await loadWeights();
+async function onBulkRemoveFiltered() {
+  if (!inspectorCurrentPlaylistId || !inspectorTracks.length) return;
+  if (!confirm(`Möchtest du diese ${inspectorTracks.length} gefilterten Songs wirklich dauerhaft aus deiner Spotify-Playlist LÖSCHEN?`)) return;
+
+  const uris = inspectorTracks.map(t => t.uri);
+  try {
+    await API.inspectBulkRemove(inspectorCurrentPlaylistId, uris);
+    toast(`${uris.length} Songs aus Playlist entfernt! 🗑️`, 'success');
+    runInspectFilter(false);
+  } catch (e) {
+    toast(`Fehler: ${e.message}`, 'error');
+  }
 }
 
-function clientSideRecalc(tracks, weights, mode, limit) {
-  // Annotate
-  const annotated = tracks.map(t => ({
-    ...t,
-    artist_weight: weights[t.artist_id] ?? 1.0,
-    final_score: t.popularity * (weights[t.artist_id] ?? 1.0),
-  }));
+function openSubPlaylistModal() {
+  if (!inspectorTracks.length) { toast('Keine Songs gefiltert', 'error'); return; }
+  $('modal-song-count').textContent = inspectorTracks.length;
+  $('modal-playlist-name').value = `Sub: ${$('insp-playlist-select').selectedOptions[0]?.text.split('(')[0].trim() || 'Selection'}`;
+  $('subplaylist-modal').style.display = 'flex';
+}
 
-  // Filter hard-banned
-  const eligible = annotated.filter(t => t.artist_weight > 0);
+async function onConfirmSaveAsNew() {
+  const name = $('modal-playlist-name').value.trim();
+  if (!name) { toast('Name erforderlich', 'error'); return; }
 
-  // Sort
-  if (mode === 'hidden_gems') {
-    eligible.sort((a, b) => {
-      const aScore = a.popularity < 55 ? a.final_score : 0;
-      const bScore = b.popularity < 55 ? b.final_score : 0;
-      return bScore - aScore || a.popularity - b.popularity;
+  const btn = $('modal-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Erstelle...';
+
+  try {
+    const res = await API.inspectSaveAsNew({
+      source_playlist_id: inspectorCurrentPlaylistId,
+      track_ids: inspectorTracks.map(t => t.id),
+      new_playlist_name: name,
+      description: $('modal-playlist-desc').value.trim(),
     });
-  } else {
-    eligible.sort((a, b) => b.final_score - a.final_score);
+    $('subplaylist-modal').style.display = 'none';
+    toast(`Sub-Playlist "${res.name}" erstellt! ✅`, 'success');
+    window.open(res.url, '_blank');
+  } catch (e) {
+    toast(`Fehler: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'In Spotify anlegen';
   }
-
-  // Apply caps
-  const counts = {};
-  const result = [];
-  for (const t of eligible) {
-    const count = counts[t.artist_id] || 0;
-    const cap = t.artist_weight < 0.5 ? 2 : (mode === 'balanced' ? 3 : limit);
-    if (t.artist_weight < 0.5 && t.popularity < 70 && count >= 1) continue;
-    if (count >= cap) continue;
-    result.push(t);
-    counts[t.artist_id] = count + 1;
-    if (result.length >= limit) break;
-  }
-
-  currentTracks = result;
-  return result;
 }
 
-async function flushWeightUpdates() {
-  const updates = Object.entries(pendingWeightUpdates);
-  if (!updates.length) return;
-  pendingWeightUpdates = {};
-  await Promise.all(
-    updates.map(([artistId, { name, weight }]) =>
-      API.setWeight(artistId, name, weight).catch(console.warn)
-    )
-  );
-}
-
-// ---- Audio preview ----
-let currentAudio = null;
-let currentPreviewId = null;
-
-function togglePreview(trackId) {
-  if (currentPreviewId === trackId) {
-    // Pause
-    currentAudio.pause();
-    currentAudio = null;
-    currentPreviewId = null;
-    document.querySelectorAll('[id^="preview-btn-"]').forEach(b => b.textContent = '▶');
+// ─────────────────────────────────────────────
+// Shared Track List Renderer
+// ─────────────────────────────────────────────
+function renderTrackList(container, tracks) {
+  if (!tracks.length) {
+    container.innerHTML = '<p class="muted center">Keine Songs vorhanden.</p>';
     return;
   }
-  if (currentAudio) currentAudio.pause();
-
-  const audio = document.getElementById(`preview-${trackId}`);
-  if (!audio) return;
-  audio.play();
-  currentAudio = audio;
-  currentPreviewId = trackId;
+  container.innerHTML = tracks.map((t, idx) => {
+    const w = artistWeights[t.artist_id] ?? t.artist_weight ?? 1.0;
+    const badgeClass = w === 0 ? ' banned' : w < 0.5 ? ' soft' : w > 1 ? ' boosted' : '';
+    return `
+    <div class="track-item" data-id="${t.id}" data-artist-id="${t.artist_id}">
+      <span class="track-num">${idx + 1}</span>
+      ${t.album_image ? `<img class="track-cover" src="${t.album_image}" alt="" />` : '<div class="track-cover-placeholder">🎵</div>'}
+      <div class="track-info">
+        <div class="track-name" title="${escHtml(t.name)}">${escHtml(t.name)}</div>
+        <div class="track-artist">${escHtml(t.artist_name)}</div>
+        ${t.vibe_score ? `<span class="vibe-tag">Vibe: ${t.vibe_score.toFixed(1)}/10</span>` : ''}
+      </div>
+      <div class="track-meta">
+        <div class="popularity-bar"><div class="popularity-fill" style="width:${t.popularity}%"></div></div>
+        <span class="track-score">${t.popularity} pop · Score: ${Math.round(t.final_score ?? t.popularity)}</span>
+      </div>
+      <div class="artist-quick-btns">
+        <span class="mini-badge${badgeClass}">${w.toFixed(1)}</span>
+        <button class="quick-btn ${w === 0 ? 'active-ban' : ''}" onclick="quickSetArtistWeight('${t.artist_id}', '${escHtml(t.artist_name)}', 0.0)" title="Hard-Ban">⛔</button>
+        <button class="quick-btn ${w > 0 && w < 0.5 ? 'active-soft' : ''}" onclick="quickSetArtistWeight('${t.artist_id}', '${escHtml(t.artist_name)}', 0.3)" title="Soft-Ban">⚠️</button>
+        <button class="quick-btn ${w === 1.0 ? 'active-normal' : ''}" onclick="quickSetArtistWeight('${t.artist_id}', '${escHtml(t.artist_name)}', 1.0)" title="Normal">1.0</button>
+        <button class="quick-btn ${w > 1.0 ? 'active-boost' : ''}" onclick="quickSetArtistWeight('${t.artist_id}', '${escHtml(t.artist_name)}', 1.8)" title="Boost">⭐</button>
+        ${t.spotify_url ? `<a href="${t.spotify_url}" target="_blank" class="btn-icon" style="padding:2px 6px;margin-left:4px" title="In Spotify öffnen">↗</a>` : ''}
+      </div>
+    </div>`;
+  }).join('');
 }
 
-// ---- Toast ----
+// ─────────────────────────────────────────────
+// Utilities
+// ─────────────────────────────────────────────
 function toast(msg, type = 'info') {
   const container = $('toast-container');
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;
   el.textContent = msg;
   container.appendChild(el);
-  setTimeout(() => el.remove(), 3500);
+  setTimeout(() => el.remove(), 4000);
 }
 
-// ---- Utils ----
 function escHtml(str) {
   if (!str) return '';
   return String(str)

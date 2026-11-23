@@ -1,12 +1,12 @@
-"""Spotify OAuth2 authentication flow."""
+"""Auth router — extended with headless OAuth fallback."""
 import logging
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
+from pydantic import BaseModel
 import spotipy
-from spotipy.oauth2 import SpotifyOAuth
 
 from app.config import get_settings
-from app.spotify_client import get_spotify_oauth, get_spotify_client, clear_spotify_cache
+from app.spotify_client import get_spotify_oauth, get_spotify_client, clear_spotify_cache, inject_token_from_url
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -21,7 +21,6 @@ async def login():
             status_code=503,
             detail="Spotify credentials not configured. Set SPOTIPY_CLIENT_ID and SPOTIPY_CLIENT_SECRET in .env",
         )
-    
     auth_manager = get_spotify_oauth()
     auth_url = auth_manager.get_authorize_url()
     return RedirectResponse(url=auth_url)
@@ -32,16 +31,14 @@ async def callback(request: Request, code: str = None, error: str = None):
     """Handle Spotify OAuth callback."""
     if error:
         return RedirectResponse(url=f"/?error={error}")
-    
     if not code:
         raise HTTPException(status_code=400, detail="No authorization code received")
-    
+
     auth_manager = get_spotify_oauth()
     token_info = auth_manager.get_access_token(code)
-    
     if not token_info:
         raise HTTPException(status_code=400, detail="Failed to get access token")
-    
+
     return RedirectResponse(url="/")
 
 
@@ -70,5 +67,25 @@ async def auth_status():
             }
     except Exception as e:
         logger.debug(f"Auth check failed: {e}")
-    
+
     return {"authenticated": False, "user": None}
+
+
+class ManualTokenRequest(BaseModel):
+    callback_url: str
+
+
+@router.post("/api/auth/manual-token")
+async def manual_token(request: ManualTokenRequest):
+    """
+    Headless Docker fallback: accepts a full Spotify callback URL
+    (e.g. http://localhost:8000/callback?code=...) and exchanges the code
+    for a token.
+
+    Use this when Docker runs on Proxmox-LAN-IP but Spotify redirects to
+    localhost/127.0.0.1 — just paste the full redirect URL here.
+    """
+    success = inject_token_from_url(request.callback_url)
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to exchange token. Check the URL and try again.")
+    return {"success": True, "message": "Token saved successfully. You are now authenticated."}
