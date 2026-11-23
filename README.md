@@ -1,107 +1,91 @@
-# Spotify AI Playlist & Power-User Suite 🎵⚡
+# Spotify Playlist Suite 🎵⚡
 
-Eine vollständige, lokal und im Docker (Proxmox / Home Assistant) laufende Web-App (Python FastAPI Backend + minimalistisches Dark-Mode Frontend), die globale Spotify-Suche, eigene Playlists/Liked Songs und **Gemini 2.5 Flash KI** kombiniert.
+Eine vollständige, lokal und im Docker (Proxmox / Home Assistant) laufende Web-App (Python FastAPI Backend + minimalistisches Dark-Mode Frontend), die einen mächtigen **Playlist Inspector / Editor**, globale Spotify-Suche, Multi-Playlist Merging und **kostenlose Google Gemini KI-Modelle** vereint.
 
 ---
 
-## 🚀 Neue Power-User Features (v2.0)
+## 🌟 Kernfunktionen
 
-1. **✨ AI Playlist Generator (Globale Suche)**
-   - Freier Prompt (z. B. *"White Girl Music 2010s Throwback"*, *"Dark Driving Techno"*)
-   - Gemini generiert strukturierte Suchstrategien (Genres, Tags, Tracks, Playlists)
-   - Sortierung nach Spotify Popularity, Balanced (max. 3/Artist) oder Hidden Gems
+1. **🔍 Playlist Inspector / Editor (Standard-Ansicht)**
+   - Öffne eine beliebige eigene Playlist und filtere/bearbeite sie live:
+   - **Live-Filter:** Suchbegriff (Titel/Artist/Album), Release-Jahre (z. B. `2000–2015`), Mindest-/Maximal-Popularity und Artist-Gewichtungsstatus (*Banned*, *Soft-Banned*, *Boosted*).
+   - **Quick-Actions pro Artist:** Direkt neben jedem Song per Klick auf `⛔ 0.0` (Hard-Ban), `⚠️ 0.3` (Soft-Ban), `1.0` (Normal) oder `⭐ 1.8` (Boost) setzen – die SQLite-DB wird sofort aktualisiert!
+   - **Duplikate aufspüren & bereinigen:** Erkennt Duplikate automatisch und entfernt sie per Klick auf Spotify.
+   - **Reordering auf Spotify:** Sortiere die Playlist nach Popularity, Release-Datum, Artist-Gewichtung oder KI-Vibe und **speichere die neue Reihenfolge permanent in deinem Spotify-Account**.
+   - **Sub-Playlist abzweigen:** Speichere die aktuell gefilterten Songs als neue Sub-Playlist ab.
 
-2. **🔀 Playlist-Mixer & Mood-Extraktor (Multi-Playlist Merge)**
-   - Mehrere eigene Playlists und/oder Lieblingssongs (Liked Songs) als Quellen-Pool auswählen
+2. **🤖 Flexible & Kostenlose Gemini-Modelle (Live von Google abrufbar)**
+   - Unterstützt alle kostenlosen Gemini-Modelle (wie `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-1.5-flash`, etc.).
+   - **Live-Modell-Abruf:** Rufe per Button in den Einstellungen direkt die aktuellsten Modelle von Google AI ab.
+   - **API-Key direkt im Web-UI eintragbar:** Kein manuelles Editieren von `.env` auf dem Server nötig – trage den Key einfach in den Einstellungen ein.
+
+3. **🔀 Playlist-Mixer & Mood-Extraktor (Multi-Playlist Merge)**
+   - Wähle mehrere deiner Playlists und/oder deine **Lieblingssongs (Liked Songs)** als Pool aus.
    - **Zweistufiges Filtering:**
-     1. *Vorfilter:* Mindest-Popularity Slider (unbekannte Filler aussortieren) + SQLite Artist Weights (Hard-Ban/Soft-Ban/Boost)
-     2. *KI-Bewertung:* Gemini 2.5 Flash bewertet alle Kandidaten im Batch von 0–10 auf Passgenauigkeit zum Ziel-Mood
-   - Automatisches Deduplizieren und Speichern als neue Spotify-Playlist
+     1. *Vorfilter:* Mindest-Popularity Slider (unbekannte Lückenfüller aussortieren) + SQLite Artist Weights (Hard-Ban/Soft-Ban/Boost).
+     2. *KI-Bewertung:* Gemini bewertet alle verbleibenden Tracks im Batch (0–10) auf Passgenauigkeit zum Ziel-Mood.
+   - Ergebnis wird dedupliziert, kombiniert gescored und direkt als neue Spotify-Playlist gespeichert.
 
-3. **🔍 Playlist Inspector (Filtern & Reordering)**
-   - Beliebige eigene Playlist öffnen
-   - Live-Filter: Suchbegriff, Mindest-/Maximal-Popularity, Release-Zeitraum (z. B. 2000–2015), Artist-Status (Banned/Soft/Boost) oder KI-Vibe Score
-   - **Bulk-Aktionen:**
-     - 🔍 Duplikate automatisch aufspüren & mit einem Klick entfernen
-     - 💾 Playlist intern neu ordnen (nach Popularity, Release-Jahr, Artist-Weight, KI-Score) und neue Reihenfolge auf Spotify speichern
-     - 🗑️ Gefilterte Songs per Klick löschen
-     - ✨ Gefilterte Songs als neue Sub-Playlist abzweigen
-     - 🎚️ Direkte Quick-Buttons (⛔ 0.0, ⚠️ Soft 0.3, 1.0, ⭐ 1.8) neben jedem Artist
+4. **✨ AI Playlist Generator (Globale Suche)**
+   - Freier Mood-Prompt (z. B. *"White Girl Music 2010s Throwback"*, *"Dark Driving Techno"*).
+   - Gemini generiert strukturierte Suchstrategien (Genres, Tags, Tracks, Playlists).
+   - Sortierung nach Spotify Popularity, Balanced (max. 3/Artist) oder Hidden Gems.
 
-4. **🔐 Headless Docker OAuth Fix für Proxmox**
-   - Unterstützt normalen Browser-Callback sowie manuelles Fallback-Feld im UI (*"Redirect-URL hier einfügen"*), falls Spotify bei Docker auf Proxmox auf `localhost` weiterleitet.
-   - Persistente Speicherung von `.spotify_cache` und `spotify_ui.db` im Docker-Volume `/app/data`.
+5. **🔐 Headless Docker OAuth Fix für Proxmox**
+   - OAuth-Token und SQLite-DB liegen im persistenten Docker-Volume `/app/data`.
+   - **Manuelles Fallback-Feld im UI:** Falls dein Browser beim Login auf dem Proxmox-Server zu `http://localhost:8000/callback?code=...` umgeleitet wird, kopierst du einfach die URL aus der Adresszeile und fügst sie unter *Settings & Gemini* ein.
 
-5. **📡 Home Assistant Integration**
+6. **📡 Home Assistant Integration**
    - Endpunkte: `POST /api/generate` & `POST /api/merge-playlists`
    - Fertige Vorlage mit `rest_command` und Automationen in [`home_assistant_examples.yaml`](home_assistant_examples.yaml).
 
 ---
 
-## 🛠️ Installation & Lokaler Start
+## 🛠️ GitHub Repository & Umzug auf Proxmox
 
-### 1. Repository vorbereiten & .env anlegen
+### Schritt 1: GitHub Repository umbenennen / hochladen
 
-```bash
-git clone https://github.com/DEIN-USERNAME/spotify-ai-playlist.git
-cd spotify-ai-playlist
-cp .env.example .env
+Das Repository heißt jetzt **`spotify-playlist`**:
+
+```powershell
+cd C:\Projects\spotify-ui
+# Git Remote auf dein neues Repository setzen:
+git remote set-url origin https://github.com/DEIN-USERNAME/spotify-playlist.git
+# Oder falls noch kein Remote existiert:
+# git remote add origin https://github.com/DEIN-USERNAME/spotify-playlist.git
+
+git branch -M main
+git push -u origin main
 ```
 
-Fülle `.env` aus:
-```env
-SPOTIPY_CLIENT_ID=deine_client_id
-SPOTIPY_CLIENT_SECRET=dein_client_secret
-SPOTIPY_REDIRECT_URI=http://localhost:8000/callback   # bzw. http://PROXMOX_IP:8000/callback
-GEMINI_API_KEY=dein_gemini_api_key
-```
+### Schritt 2: Spotify Developer Dashboard Redirect-URI
 
-### 2. Spotify App Redirect URI einrichten
-Unter [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) in deiner App:
-- `http://localhost:8000/callback` (lokal)
-- `http://<DEINE-PROXMOX-IP>:8000/callback` (Proxmox-Server)
+Unter [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) → deine App → **Settings** → **Redirect URIs**:
+- `http://localhost:8000/callback` (für lokalen Test)
+- `http://<DEINE-PROXMOX-IP>:8000/callback` (für deinen Proxmox-Server)
 
-### 3. Lokal mit venv starten
+### Schritt 3: Auf Proxmox starten (Docker Compose)
 
-```bash
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# Linux/macOS:
-source .venv/bin/activate
-
-pip install -r requirements.txt
-mkdir data
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Browser öffnen: **http://localhost:8000**
-
----
-
-## 🐳 Proxmox Docker Setup (Docker Compose)
-
-Auf deinem Proxmox-Host (oder in einem Debian/Ubuntu LXC Container mit Docker):
+Auf deinem Proxmox-Server (im LXC-Container oder VM):
 
 ```bash
 cd /opt
-git clone https://github.com/DEIN-USERNAME/spotify-ai-playlist.git
-cd spotify-ai-playlist
+git clone https://github.com/DEIN-USERNAME/spotify-playlist.git
+cd spotify-playlist
 cp .env.example .env
-nano .env   # IP deines Proxmox-Servers eintragen!
+nano .env   # Keys eintragen & SPOTIPY_REDIRECT_URI mit deiner Proxmox-IP befüllen
 
-# Container starten
+# Starten
 docker compose up -d --build
 ```
 
-### Spotify Einmal-Login auf Proxmox:
-1. Im Browser `http://<PROXMOX_IP>:8000` öffnen.
-2. Auf **Connect Spotify** klicken.
-3. Falls dein Browser dich auf `http://localhost:8000/callback?code=...` leitet und einen Verbindungsfehler anzeigt:
-   - **Kopiere einfach die gesamte URL aus der Adresszeile**
-   - Gehe in der Web-App auf den Tab **Settings & Auth**
-   - Füge die URL in das Feld *"Headless Docker OAuth"* ein und klicke auf *"Token manuell übertragen"*.
-   - Fertig! Der Token wird im Docker-Volume `/app/data` dauerhaft gespeichert.
+### Schritt 4: Im Browser öffnen & verbinden
+
+1. Öffne `http://<DEINE-PROXMOX-IP>:8000` im Browser.
+2. Klicke auf **Connect Spotify**.
+3. Unter **Settings & Gemini** kannst du jederzeit:
+   - Deinen Gemini API Key eintragen / ändern.
+   - Kostenlose Gemini-Modelle live von Google abrufen und auswählen.
 
 ---
 
@@ -112,13 +96,6 @@ docker compose up -d --build
 pytest -v
 ```
 
-Alle **55 Tests** testen u.a.:
-- Scoring, Artist-Caps, Soft-Ban (0.1–0.4), Hard-Ban (0.0), Boost (1.5–2.0)
-- Multi-Playlist Merging & Deduplizierung
-- Batch-Vibe-Scoring mit Gemini (gemockt)
-- Playlist Inspector Live-Filterung, Duplikate-Erkennung und Reordering
-- REST-Endpunkte `/api/merge-playlists` und `/api/auth/manual-token`
-
 ---
 
 ## 📁 Projektstruktur
@@ -128,16 +105,16 @@ C:\Projects\spotify-ui\
 ├── main.py                     # FastAPI App Entrypoint
 ├── requirements.txt            # Python Dependencies
 ├── .env.example                # Config-Vorlage
-├── docker-compose.yml          # Proxmox / Docker Setup
+├── docker-compose.yml          # Proxmox / Docker Setup (spotify-playlist)
 ├── Dockerfile                  # Python 3.12 Slim Container
 ├── home_assistant_examples.yaml # Home Assistant rest_commands & Automationen
 ├── README.md
 │
 ├── app/
 │   ├── config.py               # Pydantic Settings & Scopes
-│   ├── database.py             # SQLite Async (ArtistWeight DB)
+│   ├── database.py             # SQLite Async (ArtistWeight & AppSetting DB)
 │   ├── spotify_client.py       # Spotipy OAuth & Headless Token Injection
-│   ├── gemini_service.py       # Gemini 2.5 Flash Suchstrategie & Batch Vibe Scoring
+│   ├── gemini_service.py       # Gemini Live Model Fetching, Strategy & Batch Scoring
 │   ├── playlist_generator.py   # Multi-Playlist Merge, Scoring, Filter, Reordering
 │   │
 │   ├── routers/
@@ -145,15 +122,16 @@ C:\Projects\spotify-ui\
 │   │   ├── playlist.py         # POST /api/generate
 │   │   ├── library.py          # GET /api/library/* & POST /api/merge-playlists
 │   │   ├── inspect.py          # POST /api/inspect/* (Filter, Duplicates, Reorder)
+│   │   ├── settings_router.py  # GET/POST /api/settings/gemini & Live Model Fetch
 │   │   ├── artists.py          # GET/POST/DELETE /api/artists/weights
 │   │   └── devices.py          # GET /api/devices & Transfer
 │   │
-│   ├── templates/index.html    # Tab-basiertes Dark-Mode Interface
+│   ├── templates/index.html    # Inspector als Default-Tab + Gemini Settings UI
 │   └── static/
 │       ├── style.css           # Styling
 │       └── app.js              # Interaktives Frontend
 │
 └── tests/
     ├── test_playlist.py        # 36 Basistests (Scoring, Persistence, Gemini)
-    └── test_power_user.py      # 19 Power-User Tests (Merge, Batch Score, Inspector)
+    └── test_power_user.py      # Power-User Tests (Merge, Batch Score, Inspector, Settings)
 ```

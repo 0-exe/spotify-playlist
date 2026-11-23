@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import init_db
-from app.routers import auth, playlist, artists, devices, library, inspect
+from app.routers import auth, playlist, artists, devices, library, inspect, settings_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,6 +74,7 @@ app.include_router(library.router, prefix="/api", tags=["library"])
 app.include_router(inspect.router, prefix="/api", tags=["inspect"])
 app.include_router(artists.router, prefix="/api", tags=["artists"])
 app.include_router(devices.router, prefix="/api", tags=["devices"])
+app.include_router(settings_router.router, prefix="/api", tags=["settings"])
 
 
 @app.get("/")

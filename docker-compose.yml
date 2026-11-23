@@ -3,8 +3,8 @@ version: "3.9"
 services:
   spotify-ui:
     build: .
-    image: spotify-ai-playlist:latest
-    container_name: spotify-ai-playlist
+    image: spotify-playlist:latest
+    container_name: spotify-playlist
     restart: unless-stopped
     ports:
       - "${APP_PORT:-8000}:8000"

@@ -1,5 +1,5 @@
 /* =====================================================
-   Spotify AI Playlist Generator & Power-User Suite
+   Spotify Playlist Suite
    Frontend JavaScript (Vanilla ES6)
    ===================================================== */
 
@@ -87,16 +87,24 @@ const API = {
   }).then(r => r.json()),
   deleteWeight: (artistId) => fetch(`/api/artists/weights/${artistId}`, { method: 'DELETE' }),
   listWeights: () => fetch('/api/artists/weights').then(r => r.json()),
+  getGeminiSettings: () => fetch('/api/settings/gemini').then(r => r.json()),
+  saveGeminiSettings: (body) => fetch('/api/settings/gemini', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(r => r.json()),
+  fetchLiveGeminiModels: (apiKey = '') => fetch(`/api/settings/gemini/models?api_key=${encodeURIComponent(apiKey)}`).then(r => r.json()),
 };
 
 // State
 let userPlaylistsCache = [];
-let artistWeights = {}; // artist_id -> float
+let artistWeights = {};
 let currentTracks = [];
 let currentStrategy = {};
 let mixerCurrentTracks = [];
 let inspectorTracks = [];
 let inspectorCurrentPlaylistId = '';
+let cachedGeminiModels = [];
 
 const $ = id => document.getElementById(id);
 
@@ -110,6 +118,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   await checkAuth();
   await loadWeights();
   await refreshDevices();
+  await loadGeminiSettings();
+
+  // DEFAULT TAB: Load playlists into Inspector immediately!
+  loadInspectorPlaylists();
 
   // Generator Tab Listeners
   $('generate-btn').addEventListener('click', onGenerate);
@@ -141,7 +153,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('modal-cancel-btn').addEventListener('click', () => $('subplaylist-modal').style.display = 'none');
   $('modal-confirm-btn').addEventListener('click', onConfirmSaveAsNew);
 
-  // Settings / Manual OAuth
+  // Settings & Gemini Listeners
+  $('toggle-gemini-key-vis').addEventListener('click', toggleGeminiKeyVisibility);
+  $('save-gemini-settings-btn').addEventListener('click', onSaveGeminiSettings);
+  $('fetch-gemini-models-btn').addEventListener('click', onFetchLiveGeminiModels);
+  $('gemini-model-select').addEventListener('change', onGeminiModelChange);
   $('submit-manual-token').addEventListener('click', onSubmitManualToken);
 });
 
@@ -152,20 +168,24 @@ function setupTabs() {
   const tabs = document.querySelectorAll('.tab-btn');
   tabs.forEach(btn => {
     btn.addEventListener('click', () => {
-      tabs.forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
-      btn.classList.add('active');
-      const target = $(btn.dataset.tab);
-      if (target) {
-        target.style.display = 'block';
-        if (btn.dataset.tab === 'tab-mixer' && userPlaylistsCache.length === 0) {
-          loadMixerPlaylists();
-        } else if (btn.dataset.tab === 'tab-inspector' && $('insp-playlist-select').options.length <= 1) {
-          loadInspectorPlaylists();
-        }
-      }
+      switchToTab(btn.dataset.tab);
     });
   });
+}
+
+function switchToTab(tabId) {
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tabId);
+  });
+  document.querySelectorAll('.tab-content').forEach(c => {
+    c.style.display = c.id === tabId ? 'block' : 'none';
+  });
+
+  if (tabId === 'tab-mixer' && userPlaylistsCache.length === 0) {
+    loadMixerPlaylists();
+  } else if (tabId === 'tab-inspector' && $('insp-playlist-select').options.length <= 1) {
+    loadInspectorPlaylists();
+  }
 }
 
 function setupRangeDisplays() {
@@ -245,6 +265,109 @@ async function refreshDevices() {
 }
 
 // ─────────────────────────────────────────────
+// GEMINI SETTINGS & MODEL PICKER
+// ─────────────────────────────────────────────
+async function loadGeminiSettings() {
+  try {
+    const data = await API.getGeminiSettings();
+    updateGeminiKeyStatus(data.has_key, data.api_key_masked);
+    cachedGeminiModels = data.available_models || [];
+    renderGeminiModelOptions(cachedGeminiModels, data.selected_model);
+  } catch (e) {
+    console.warn('Gemini settings load error:', e);
+  }
+}
+
+function updateGeminiKeyStatus(hasKey, masked) {
+  const statusEl = $('gemini-key-status');
+  if (hasKey) {
+    statusEl.innerHTML = `✅ Key aktiv: <code>${masked}</code>`;
+    statusEl.style.color = 'var(--accent)';
+  } else {
+    statusEl.innerHTML = `⚠️ Kein Key hinterlegt — bitte eintragen!`;
+    statusEl.style.color = 'var(--warning)';
+  }
+}
+
+function renderGeminiModelOptions(models, selectedId) {
+  const sel = $('gemini-model-select');
+  sel.innerHTML = '';
+  models.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    let label = m.display_name || m.id;
+    if (m.is_free_tier) label += ' (Free Tier)';
+    if (m.recommended) label += ' ⭐ Empfohlen';
+    opt.textContent = label;
+    if (m.id === selectedId) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  onGeminiModelChange();
+}
+
+function onGeminiModelChange() {
+  const sel = $('gemini-model-select');
+  const chosenId = sel.value;
+  const found = cachedGeminiModels.find(m => m.id === chosenId);
+  const descEl = $('gemini-model-desc');
+  if (found) {
+    descEl.innerHTML = `<strong>${escHtml(found.display_name || found.id)}:</strong> ${escHtml(found.description || 'Google Generative Language Model')} ${found.is_free_tier ? '<span class="tag-pro ml-2">Free Tier</span>' : ''}`;
+  } else {
+    descEl.innerHTML = `<strong>${escHtml(chosenId)}</strong>`;
+  }
+}
+
+function toggleGeminiKeyVisibility() {
+  const input = $('gemini-api-key-input');
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+async function onSaveGeminiSettings() {
+  const keyVal = $('gemini-api-key-input').value.trim();
+  const modelVal = $('gemini-model-select').value;
+  const btn = $('save-gemini-settings-btn');
+
+  btn.disabled = true;
+  btn.textContent = 'Speichere...';
+
+  try {
+    const payload = { model: modelVal };
+    if (keyVal) payload.api_key = keyVal;
+
+    const res = await API.saveGeminiSettings(payload);
+    updateGeminiKeyStatus(res.has_key, res.api_key_masked);
+    $('gemini-api-key-input').value = '';
+    toast(`Gemini-Einstellungen gespeichert! Modell: ${res.selected_model}`, 'success');
+    await checkConfig();
+  } catch (e) {
+    toast(`Fehler: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 Gemini-Einstellungen speichern';
+  }
+}
+
+async function onFetchLiveGeminiModels() {
+  const btn = $('fetch-gemini-models-btn');
+  btn.disabled = true;
+  btn.textContent = 'Frage Google ab...';
+  const customKey = $('gemini-api-key-input').value.trim();
+
+  try {
+    const res = await API.fetchLiveGeminiModels(customKey);
+    cachedGeminiModels = res.models || [];
+    const currentSelected = $('gemini-model-select').value;
+    renderGeminiModelOptions(cachedGeminiModels, currentSelected);
+    toast(`${res.count} Modelle live von Google abgerufen! 🎉`, 'success');
+  } catch (e) {
+    toast(`Fehler beim Abrufen der Modelle: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 Modelle live von Google abrufen';
+  }
+}
+
+// ─────────────────────────────────────────────
 // Artist Weights Management
 // ─────────────────────────────────────────────
 async function loadWeights() {
@@ -302,246 +425,7 @@ async function quickSetArtistWeight(artistId, artistName, weight) {
 }
 
 // ─────────────────────────────────────────────
-// TAB 1: AI GENERATOR
-// ─────────────────────────────────────────────
-async function onGenerate() {
-  const prompt = $('prompt-input').value.trim();
-  if (!prompt) { toast('Bitte Mood-Prompt eingeben', 'error'); return; }
-
-  const btn = $('generate-btn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="btn-icon">⟳</span> Analysiere...';
-  $('empty-state').style.display = 'none';
-  $('loading-state').style.display = 'flex';
-  $('results-section').style.display = 'none';
-  $('playlist-created').style.display = 'none';
-
-  try {
-    const result = await API.generate({
-      prompt,
-      limit: parseInt($('limit-input').value) || 40,
-      sort_mode: $('sort-mode').value,
-      create_on_spotify: false,
-      playlist_name: '',
-      device_name: $('device-select').value,
-      start_playback: false,
-    });
-    currentTracks = result.tracks;
-    currentStrategy = result.search_strategy;
-    renderGeneratorResults(result);
-    $('create-spotify-btn').disabled = false;
-    toast(`Gefunden: ${result.tracks.length} Songs!`, 'success');
-  } catch (e) {
-    toast(`Fehler: ${e.message}`, 'error');
-    $('empty-state').style.display = 'flex';
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<span class="btn-icon">✨</span> Playlist generieren';
-    $('loading-state').style.display = 'none';
-  }
-}
-
-async function onCreateSpotify() {
-  if (!currentTracks.length) return;
-  const btn = $('create-spotify-btn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="btn-icon">⟳</span> Speichere...';
-
-  try {
-    const prompt = $('prompt-input').value.trim();
-    const result = await API.generate({
-      prompt,
-      limit: parseInt($('limit-input').value) || 40,
-      sort_mode: $('sort-mode').value,
-      create_on_spotify: true,
-      playlist_name: $('playlist-name').value.trim() || `🎵 ${prompt.slice(0, 35)}`,
-      device_name: $('device-select').value,
-      start_playback: $('start-playback').checked,
-    });
-    if (result.playlist) {
-      $('playlist-created').style.display = 'flex';
-      $('playlist-created-text').textContent = `Playlist "${result.playlist.name}" mit ${result.playlist.tracks_added} Songs erstellt!`;
-      $('playlist-link').href = result.playlist.url;
-      toast('In Spotify gespeichert! ✅', 'success');
-    }
-  } catch (e) {
-    toast(`Fehler: ${e.message}`, 'error');
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<span class="btn-icon">➕</span> In Spotify speichern';
-  }
-}
-
-function renderGeneratorResults(result) {
-  $('results-section').style.display = 'block';
-  $('results-title').textContent = $('playlist-name').value.trim() || `🎵 ${$('prompt-input').value.trim().slice(0, 35)}`;
-  $('results-meta').textContent = `${result.tracks.length} Songs · ${result.total_found} durchsucht · Modus: ${$('sort-mode').value}`;
-  $('mood-badge').textContent = result.mood_description || '';
-
-  const strategy = result.search_strategy || {};
-  const tags = [
-    ...(strategy.genres || []).map(g => `🎸 ${g}`),
-    ...(strategy.decade_tags || []).map(d => `📅 ${d}`),
-    `⚡ ${strategy.energy_level || 'medium'}`,
-  ];
-  $('strategy-content').innerHTML = tags.map(t => `<span class="strategy-tag">${escHtml(t)}</span>`).join('');
-  renderTrackList($('track-list'), result.tracks);
-}
-
-function recalcGeneratorClientSide() {
-  if (!currentTracks.length) return;
-  const limit = parseInt($('limit-input').value) || 40;
-  const mode = $('sort-mode').value;
-
-  const annotated = currentTracks.map(t => ({
-    ...t,
-    artist_weight: artistWeights[t.artist_id] ?? 1.0,
-    final_score: t.popularity * (artistWeights[t.artist_id] ?? 1.0),
-  })).filter(t => t.artist_weight > 0);
-
-  if (mode === 'hidden_gems') {
-    annotated.sort((a, b) => (b.popularity < 55 ? b.final_score : 0) - (a.popularity < 55 ? a.final_score : 0));
-  } else {
-    annotated.sort((a, b) => b.final_score - a.final_score);
-  }
-
-  const counts = {};
-  const result = [];
-  for (const t of annotated) {
-    const c = counts[t.artist_id] || 0;
-    const cap = t.artist_weight < 0.5 ? 2 : (mode === 'balanced' ? 3 : limit);
-    if (t.artist_weight < 0.5 && t.popularity < 70 && c >= 1) continue;
-    if (c >= cap) continue;
-    result.push(t);
-    counts[t.artist_id] = c + 1;
-    if (result.length >= limit) break;
-  }
-  currentTracks = result;
-  renderTrackList($('track-list'), result);
-}
-
-// ─────────────────────────────────────────────
-// TAB 2: PLAYLIST-MIXER
-// ─────────────────────────────────────────────
-async function loadMixerPlaylists() {
-  const container = $('mixer-playlists-list');
-  container.innerHTML = '<p class="muted small center">Lade Playlists von Spotify...</p>';
-  try {
-    const res = await API.userPlaylists();
-    userPlaylistsCache = res.playlists || [];
-    renderMixerPlaylistChecklist(userPlaylistsCache);
-  } catch (e) {
-    container.innerHTML = `<p class="muted small center">Fehler: ${e.message}</p>`;
-  }
-}
-
-function renderMixerPlaylistChecklist(playlists) {
-  const container = $('mixer-playlists-list');
-  if (!playlists.length) {
-    container.innerHTML = '<p class="muted small center">Keine Playlists gefunden</p>';
-    return;
-  }
-  container.innerHTML = playlists.map(pl => `
-    <label class="pl-item" title="${escHtml(pl.name)} (${pl.track_count} Songs)">
-      <input type="checkbox" class="mixer-pl-cb" value="${pl.id}" data-name="${escHtml(pl.name)}" />
-      ${pl.image ? `<img class="pl-item-cover" src="${pl.image}" alt="" />` : '<div class="pl-item-cover"></div>'}
-      <div class="pl-item-info">
-        <div>${escHtml(pl.name)}</div>
-        <div class="pl-item-meta">${pl.track_count} Songs · ${escHtml(pl.owner)}</div>
-      </div>
-    </label>
-  `).join('');
-}
-
-function filterMixerPlaylists() {
-  const q = $('mixer-search-pl').value.toLowerCase();
-  const filtered = userPlaylistsCache.filter(p => p.name.toLowerCase().includes(q));
-  renderMixerPlaylistChecklist(filtered);
-}
-
-async function onRunMixer() {
-  const prompt = $('mixer-prompt').value.trim();
-  if (!prompt) { toast('Bitte Ziel-Vibe/Mood eingeben', 'error'); return; }
-
-  const selectedIds = Array.from(document.querySelectorAll('.mixer-pl-cb:checked')).map(cb => cb.value);
-  const includeLiked = $('mixer-include-liked').checked;
-
-  if (selectedIds.length === 0 && !includeLiked) {
-    toast('Wähle mindestens 1 Playlist oder "Liked Songs" als Quelle aus', 'error');
-    return;
-  }
-
-  $('mixer-empty-state').style.display = 'none';
-  $('mixer-loading-state').style.display = 'flex';
-  $('mixer-results').style.display = 'none';
-  $('mixer-run-btn').disabled = true;
-
-  try {
-    const body = {
-      prompt,
-      playlist_ids: selectedIds,
-      include_liked_songs: includeLiked,
-      min_popularity: parseInt($('mixer-min-pop').value) || 0,
-      min_vibe_score: parseFloat($('mixer-min-vibe').value) || 0.0,
-      limit: parseInt($('mixer-limit').value) || 40,
-      sort_mode: $('mixer-sort').value,
-      create_on_spotify: false,
-      use_ai_scoring: $('mixer-use-ai').checked,
-    };
-    const res = await API.mergePlaylists(body);
-    mixerCurrentTracks = res.tracks;
-    $('mixer-results-title').textContent = $('mixer-target-name').value.trim() || `Mixer: ${prompt.slice(0, 30)}`;
-    $('mixer-results-stats').textContent = `${res.tracks.length} finale Songs (aus ${res.total_candidates} Gesamtsongs, ${res.after_popularity_filter} nach Vorfilter)`;
-    renderTrackList($('mixer-track-list'), res.tracks);
-    $('mixer-results').style.display = 'block';
-    toast(`Merge erfolgreich: ${res.tracks.length} Banger gefunden!`, 'success');
-  } catch (e) {
-    toast(`Merge-Fehler: ${e.message}`, 'error');
-    $('mixer-empty-state').style.display = 'flex';
-  } finally {
-    $('mixer-loading-state').style.display = 'none';
-    $('mixer-run-btn').disabled = false;
-  }
-}
-
-async function onSaveMixerToSpotify() {
-  if (!mixerCurrentTracks.length) return;
-  const prompt = $('mixer-prompt').value.trim();
-  const name = $('mixer-target-name').value.trim() || `Mixer: ${prompt.slice(0, 30)}`;
-  const selectedIds = Array.from(document.querySelectorAll('.mixer-pl-cb:checked')).map(cb => cb.value);
-
-  const btn = $('mixer-save-spotify-btn');
-  btn.disabled = true;
-  btn.textContent = 'Speichere...';
-
-  try {
-    const res = await API.mergePlaylists({
-      prompt,
-      playlist_ids: selectedIds,
-      include_liked_songs: $('mixer-include-liked').checked,
-      min_popularity: parseInt($('mixer-min-pop').value) || 0,
-      min_vibe_score: parseFloat($('mixer-min-vibe').value) || 0.0,
-      limit: parseInt($('mixer-limit').value) || 40,
-      sort_mode: $('mixer-sort').value,
-      create_on_spotify: true,
-      target_playlist_name: name,
-      start_playback_after: $('mixer-start-play').checked,
-      use_ai_scoring: false, // already scored
-    });
-    if (res.playlist) {
-      toast(`Playlist "${res.playlist.name}" in Spotify angelegt! ✅`, 'success');
-      window.open(res.playlist.url, '_blank');
-    }
-  } catch (e) {
-    toast(`Fehler: ${e.message}`, 'error');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '💾 In Spotify anlegen';
-  }
-}
-
-// ─────────────────────────────────────────────
-// TAB 3: PLAYLIST INSPECTOR
+// TAB 1: PLAYLIST INSPECTOR / EDITOR
 // ─────────────────────────────────────────────
 async function loadInspectorPlaylists() {
   const sel = $('insp-playlist-select');
@@ -743,6 +627,245 @@ async function onConfirmSaveAsNew() {
     btn.disabled = false;
     btn.textContent = 'In Spotify anlegen';
   }
+}
+
+// ─────────────────────────────────────────────
+// TAB 2: PLAYLIST-MIXER
+// ─────────────────────────────────────────────
+async function loadMixerPlaylists() {
+  const container = $('mixer-playlists-list');
+  container.innerHTML = '<p class="muted small center">Lade Playlists von Spotify...</p>';
+  try {
+    const res = await API.userPlaylists();
+    userPlaylistsCache = res.playlists || [];
+    renderMixerPlaylistChecklist(userPlaylistsCache);
+  } catch (e) {
+    container.innerHTML = `<p class="muted small center">Fehler: ${e.message}</p>`;
+  }
+}
+
+function renderMixerPlaylistChecklist(playlists) {
+  const container = $('mixer-playlists-list');
+  if (!playlists.length) {
+    container.innerHTML = '<p class="muted small center">Keine Playlists gefunden</p>';
+    return;
+  }
+  container.innerHTML = playlists.map(pl => `
+    <label class="pl-item" title="${escHtml(pl.name)} (${pl.track_count} Songs)">
+      <input type="checkbox" class="mixer-pl-cb" value="${pl.id}" data-name="${escHtml(pl.name)}" />
+      ${pl.image ? `<img class="pl-item-cover" src="${pl.image}" alt="" />` : '<div class="pl-item-cover"></div>'}
+      <div class="pl-item-info">
+        <div>${escHtml(pl.name)}</div>
+        <div class="pl-item-meta">${pl.track_count} Songs · ${escHtml(pl.owner)}</div>
+      </div>
+    </label>
+  `).join('');
+}
+
+function filterMixerPlaylists() {
+  const q = $('mixer-search-pl').value.toLowerCase();
+  const filtered = userPlaylistsCache.filter(p => p.name.toLowerCase().includes(q));
+  renderMixerPlaylistChecklist(filtered);
+}
+
+async function onRunMixer() {
+  const prompt = $('mixer-prompt').value.trim();
+  if (!prompt) { toast('Bitte Ziel-Vibe/Mood eingeben', 'error'); return; }
+
+  const selectedIds = Array.from(document.querySelectorAll('.mixer-pl-cb:checked')).map(cb => cb.value);
+  const includeLiked = $('mixer-include-liked').checked;
+
+  if (selectedIds.length === 0 && !includeLiked) {
+    toast('Wähle mindestens 1 Playlist oder "Liked Songs" als Quelle aus', 'error');
+    return;
+  }
+
+  $('mixer-empty-state').style.display = 'none';
+  $('mixer-loading-state').style.display = 'flex';
+  $('mixer-results').style.display = 'none';
+  $('mixer-run-btn').disabled = true;
+
+  try {
+    const body = {
+      prompt,
+      playlist_ids: selectedIds,
+      include_liked_songs: includeLiked,
+      min_popularity: parseInt($('mixer-min-pop').value) || 0,
+      min_vibe_score: parseFloat($('mixer-min-vibe').value) || 0.0,
+      limit: parseInt($('mixer-limit').value) || 40,
+      sort_mode: $('mixer-sort').value,
+      create_on_spotify: false,
+      use_ai_scoring: $('mixer-use-ai').checked,
+    };
+    const res = await API.mergePlaylists(body);
+    mixerCurrentTracks = res.tracks;
+    $('mixer-results-title').textContent = $('mixer-target-name').value.trim() || `Mixer: ${prompt.slice(0, 30)}`;
+    $('mixer-results-stats').textContent = `${res.tracks.length} finale Songs (aus ${res.total_candidates} Gesamtsongs, ${res.after_popularity_filter} nach Vorfilter)`;
+    renderTrackList($('mixer-track-list'), res.tracks);
+    $('mixer-results').style.display = 'block';
+    toast(`Merge erfolgreich: ${res.tracks.length} Banger gefunden!`, 'success');
+  } catch (e) {
+    toast(`Merge-Fehler: ${e.message}`, 'error');
+    $('mixer-empty-state').style.display = 'flex';
+  } finally {
+    $('mixer-loading-state').style.display = 'none';
+    $('mixer-run-btn').disabled = false;
+  }
+}
+
+async function onSaveMixerToSpotify() {
+  if (!mixerCurrentTracks.length) return;
+  const prompt = $('mixer-prompt').value.trim();
+  const name = $('mixer-target-name').value.trim() || `Mixer: ${prompt.slice(0, 30)}`;
+  const selectedIds = Array.from(document.querySelectorAll('.mixer-pl-cb:checked')).map(cb => cb.value);
+
+  const btn = $('mixer-save-spotify-btn');
+  btn.disabled = true;
+  btn.textContent = 'Speichere...';
+
+  try {
+    const res = await API.mergePlaylists({
+      prompt,
+      playlist_ids: selectedIds,
+      include_liked_songs: $('mixer-include-liked').checked,
+      min_popularity: parseInt($('mixer-min-pop').value) || 0,
+      min_vibe_score: parseFloat($('mixer-min-vibe').value) || 0.0,
+      limit: parseInt($('mixer-limit').value) || 40,
+      sort_mode: $('mixer-sort').value,
+      create_on_spotify: true,
+      target_playlist_name: name,
+      start_playback_after: $('mixer-start-play').checked,
+      use_ai_scoring: false,
+    });
+    if (res.playlist) {
+      toast(`Playlist "${res.playlist.name}" in Spotify angelegt! ✅`, 'success');
+      window.open(res.playlist.url, '_blank');
+    }
+  } catch (e) {
+    toast(`Fehler: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 In Spotify anlegen';
+  }
+}
+
+// ─────────────────────────────────────────────
+// TAB 3: AI GENERATOR
+// ─────────────────────────────────────────────
+async function onGenerate() {
+  const prompt = $('prompt-input').value.trim();
+  if (!prompt) { toast('Bitte Mood-Prompt eingeben', 'error'); return; }
+
+  const btn = $('generate-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="btn-icon">⟳</span> Analysiere...';
+  $('empty-state').style.display = 'none';
+  $('loading-state').style.display = 'flex';
+  $('results-section').style.display = 'none';
+  $('playlist-created').style.display = 'none';
+
+  try {
+    const result = await API.generate({
+      prompt,
+      limit: parseInt($('limit-input').value) || 40,
+      sort_mode: $('sort-mode').value,
+      create_on_spotify: false,
+      playlist_name: '',
+      device_name: $('device-select').value,
+      start_playback: false,
+    });
+    currentTracks = result.tracks;
+    currentStrategy = result.search_strategy;
+    renderGeneratorResults(result);
+    $('create-spotify-btn').disabled = false;
+    toast(`Gefunden: ${result.tracks.length} Songs!`, 'success');
+  } catch (e) {
+    toast(`Fehler: ${e.message}`, 'error');
+    $('empty-state').style.display = 'flex';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<span class="btn-icon">✨</span> Playlist generieren';
+    $('loading-state').style.display = 'none';
+  }
+}
+
+async function onCreateSpotify() {
+  if (!currentTracks.length) return;
+  const btn = $('create-spotify-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="btn-icon">⟳</span> Speichere...';
+
+  try {
+    const prompt = $('prompt-input').value.trim();
+    const result = await API.generate({
+      prompt,
+      limit: parseInt($('limit-input').value) || 40,
+      sort_mode: $('sort-mode').value,
+      create_on_spotify: true,
+      playlist_name: $('playlist-name').value.trim() || `🎵 ${prompt.slice(0, 35)}`,
+      device_name: $('device-select').value,
+      start_playback: $('start-playback').checked,
+    });
+    if (result.playlist) {
+      $('playlist-created').style.display = 'flex';
+      $('playlist-created-text').textContent = `Playlist "${result.playlist.name}" mit ${result.playlist.tracks_added} Songs erstellt!`;
+      $('playlist-link').href = result.playlist.url;
+      toast('In Spotify gespeichert! ✅', 'success');
+    }
+  } catch (e) {
+    toast(`Fehler: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<span class="btn-icon">➕</span> In Spotify speichern';
+  }
+}
+
+function renderGeneratorResults(result) {
+  $('results-section').style.display = 'block';
+  $('results-title').textContent = $('playlist-name').value.trim() || `🎵 ${$('prompt-input').value.trim().slice(0, 35)}`;
+  $('results-meta').textContent = `${result.tracks.length} Songs · ${result.total_found} durchsucht · Modus: ${$('sort-mode').value}`;
+  $('mood-badge').textContent = result.mood_description || '';
+
+  const strategy = result.search_strategy || {};
+  const tags = [
+    ...(strategy.genres || []).map(g => `🎸 ${g}`),
+    ...(strategy.decade_tags || []).map(d => `📅 ${d}`),
+    `⚡ ${strategy.energy_level || 'medium'}`,
+  ];
+  $('strategy-content').innerHTML = tags.map(t => `<span class="strategy-tag">${escHtml(t)}</span>`).join('');
+  renderTrackList($('track-list'), result.tracks);
+}
+
+function recalcGeneratorClientSide() {
+  if (!currentTracks.length) return;
+  const limit = parseInt($('limit-input').value) || 40;
+  const mode = $('sort-mode').value;
+
+  const annotated = currentTracks.map(t => ({
+    ...t,
+    artist_weight: artistWeights[t.artist_id] ?? 1.0,
+    final_score: t.popularity * (artistWeights[t.artist_id] ?? 1.0),
+  })).filter(t => t.artist_weight > 0);
+
+  if (mode === 'hidden_gems') {
+    annotated.sort((a, b) => (b.popularity < 55 ? b.final_score : 0) - (a.popularity < 55 ? a.final_score : 0));
+  } else {
+    annotated.sort((a, b) => b.final_score - a.final_score);
+  }
+
+  const counts = {};
+  const result = [];
+  for (const t of annotated) {
+    const c = counts[t.artist_id] || 0;
+    const cap = t.artist_weight < 0.5 ? 2 : (mode === 'balanced' ? 3 : limit);
+    if (t.artist_weight < 0.5 && t.popularity < 70 && c >= 1) continue;
+    if (c >= cap) continue;
+    result.push(t);
+    counts[t.artist_id] = c + 1;
+    if (result.length >= limit) break;
+  }
+  currentTracks = result;
+  renderTrackList($('track-list'), result);
 }
 
 // ─────────────────────────────────────────────

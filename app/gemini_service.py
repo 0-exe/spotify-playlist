@@ -1,10 +1,12 @@
-"""Gemini AI service: search strategy generation + batch track vibe scoring."""
+"""Gemini AI service: search strategy generation + batch track vibe scoring + dynamic model fetching."""
 import json
 import logging
 import re
 from typing import Any
+import httpx
 
 from app.config import get_settings
+from app.database import get_app_setting, set_app_setting
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +40,126 @@ Tracks to rate:
 
 Example output: [{{"id":"track123","score":8.5}},{{"id":"track456","score":3.0}}]"""
 
+# Standard list of free-tier supported Gemini models on Google AI Studio
+DEFAULT_FREE_MODELS = [
+    {
+        "id": "gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "description": "Empfohlen: Neuestes, schnelles Modell mit exzellenter Kuratierung und hoher Genauigkeit (Free-Tier Kontingent)",
+        "is_free_tier": True,
+        "recommended": True,
+    },
+    {
+        "id": "gemini-2.5-flash-lite",
+        "display_name": "Gemini 2.5 Flash-Lite",
+        "description": "Extrem schnell, minimale Latenz und sparsamste Token-Nutzung (Free Tier)",
+        "is_free_tier": True,
+        "recommended": False,
+    },
+    {
+        "id": "gemini-2.0-flash",
+        "display_name": "Gemini 2.0 Flash",
+        "description": "Solides, schnelles Allrounder-Modell der 2. Generation (Free Tier)",
+        "is_free_tier": True,
+        "recommended": False,
+    },
+    {
+        "id": "gemini-1.5-flash",
+        "display_name": "Gemini 1.5 Flash",
+        "description": "Bewährtes Flash-Modell der 1.5 Serie mit hoher Geschwindigkeit (Free Tier)",
+        "is_free_tier": True,
+        "recommended": False,
+    },
+    {
+        "id": "gemini-1.5-flash-8b",
+        "display_name": "Gemini 1.5 Flash-8B",
+        "description": "Kompaktes 8B-Modell für besonders schnellen Durchsatz (Free Tier)",
+        "is_free_tier": True,
+        "recommended": False,
+    },
+]
+
+
+async def get_effective_gemini_config() -> tuple[str, str]:
+    """
+    Returns (api_key, model_name).
+    Checks SQLite DB app_settings first, then falls back to .env settings.
+    """
+    settings = get_settings()
+    db_key = await get_app_setting("gemini_api_key", "")
+    api_key = db_key.strip() if db_key.strip() else settings.gemini_api_key
+
+    db_model = await get_app_setting("gemini_model", "")
+    model = db_model.strip() if db_model.strip() else "gemini-2.5-flash"
+
+    return api_key, model
+
+
+async def fetch_available_gemini_models(api_key: str | None = None) -> list[dict[str, Any]]:
+    """
+    Query Google Generative Language API directly to discover all available models,
+    filtering for content generation models and flagging Free-Tier eligible models.
+    """
+    if not api_key:
+        api_key, _ = await get_effective_gemini_config()
+
+    if not api_key:
+        return DEFAULT_FREE_MODELS
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http_client:
+            resp = await http_client.get(url)
+            if resp.status_code != 200:
+                logger.warning(f"Google models endpoint returned status {resp.status_code}: {resp.text[:200]}")
+                return DEFAULT_FREE_MODELS
+
+            data = resp.json()
+            raw_models = data.get("models", [])
+
+            parsed_models: list[dict[str, Any]] = []
+            for m in raw_models:
+                methods = m.get("supportedGenerationMethods", [])
+                if "generateContent" not in methods:
+                    continue
+
+                full_name = m.get("name", "")
+                model_id = full_name.replace("models/", "")
+                
+                # Exclude embedding, aqa, or image-only models
+                if "embedding" in model_id.lower() or "aqa" in model_id.lower():
+                    continue
+
+                display_name = m.get("displayName", model_id)
+                description = m.get("description", "")
+
+                # Free-tier identification on Google AI Studio:
+                # "flash" and "flash-lite" models enjoy the standard free-tier quota (15 RPM / 1M TPM)
+                is_free = any(k in model_id.lower() for k in ["flash", "flash-lite", "flash-8b", "2.5-flash", "2.0-flash"])
+                is_rec = model_id == "gemini-2.5-flash"
+
+                parsed_models.append({
+                    "id": model_id,
+                    "display_name": display_name,
+                    "description": description,
+                    "is_free_tier": is_free,
+                    "recommended": is_rec,
+                })
+
+            # Sort: Recommended first, then free-tier models, then others
+            parsed_models.sort(key=lambda x: (not x["recommended"], not x["is_free_tier"], x["id"]))
+            return parsed_models if parsed_models else DEFAULT_FREE_MODELS
+
+    except Exception as e:
+        logger.error(f"Failed to fetch models from Google: {e}")
+        return DEFAULT_FREE_MODELS
+
 
 async def get_search_strategy(prompt: str) -> dict[str, Any]:
     """Use Gemini to generate a search strategy for the given mood/vibe prompt."""
-    settings = get_settings()
+    api_key, model_name = await get_effective_gemini_config()
 
-    if not settings.gemini_api_key:
+    if not api_key:
         logger.warning("Gemini API key not set, using fallback search strategy")
         return _fallback_strategy(prompt)
 
@@ -51,11 +167,11 @@ async def get_search_strategy(prompt: str) -> dict[str, Any]:
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=settings.gemini_api_key)
+        client = genai.Client(api_key=api_key)
         full_prompt = SEARCH_STRATEGY_PROMPT.format(prompt=prompt)
 
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=model_name,
             contents=full_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
@@ -68,14 +184,14 @@ async def get_search_strategy(prompt: str) -> dict[str, Any]:
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
         result = json.loads(text)
-        logger.info(f"Gemini search strategy generated for: {prompt!r}")
+        logger.info(f"Gemini search strategy generated with model '{model_name}' for: {prompt!r}")
         return result
 
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse Gemini response as JSON: {e}")
         return _fallback_strategy(prompt)
     except Exception as e:
-        logger.error(f"Gemini API error: {e}")
+        logger.error(f"Gemini API error with model '{model_name}': {e}")
         return _fallback_strategy(prompt)
 
 
@@ -86,15 +202,12 @@ async def batch_score_tracks(
 ) -> dict[str, float]:
     """
     Score a list of tracks (0–10) for how well they match the given mood/vibe.
-    Uses Gemini in batches of `batch_size` tracks.
-
-    Returns: dict mapping track_id -> vibe_score (float 0.0–10.0).
-    Falls back to 5.0 for all tracks if Gemini is unavailable.
+    Uses selected Gemini model in batches of `batch_size` tracks.
     """
-    settings = get_settings()
+    api_key, model_name = await get_effective_gemini_config()
     scores: dict[str, float] = {}
 
-    if not settings.gemini_api_key:
+    if not api_key:
         logger.warning("Gemini API key not set — using neutral score 5.0 for all tracks")
         return {t["id"]: 5.0 for t in tracks}
 
@@ -102,9 +215,8 @@ async def batch_score_tracks(
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=settings.gemini_api_key)
+        client = genai.Client(api_key=api_key)
 
-        # Process in batches
         for i in range(0, len(tracks), batch_size):
             batch = tracks[i : i + batch_size]
             tracks_data = [
@@ -123,7 +235,7 @@ async def batch_score_tracks(
 
             try:
                 response = client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model=model_name,
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT,
@@ -139,9 +251,9 @@ async def batch_score_tracks(
                     tid = item.get("id", "")
                     score = float(item.get("score", 5.0))
                     scores[tid] = max(0.0, min(10.0, score))
-                logger.info(f"Scored batch {i // batch_size + 1}: {len(batch)} tracks for mood '{mood}'")
+                logger.info(f"Scored batch with {model_name}: {len(batch)} tracks for mood '{mood}'")
             except Exception as e:
-                logger.error(f"Batch scoring failed for batch {i // batch_size + 1}: {e}")
+                logger.error(f"Batch scoring failed with {model_name}: {e}")
                 for t in batch:
                     scores.setdefault(t["id"], 5.0)
 
@@ -149,7 +261,6 @@ async def batch_score_tracks(
         logger.error(f"Gemini batch scoring init error: {e}")
         return {t["id"]: 5.0 for t in tracks}
 
-    # Fill any missing
     for t in tracks:
         scores.setdefault(t["id"], 5.0)
 

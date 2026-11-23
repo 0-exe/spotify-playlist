@@ -5,6 +5,7 @@ Comprehensive tests for Power-User features:
 - Batch Gemini Vibe Scoring (mocked)
 - Internal Playlist Inspector: Filtering, Duplicates Detection, Reordering
 - REST Endpoint POST /api/merge-playlists (FastAPI TestClient)
+- Gemini Settings & Dynamic Model Selection
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,7 +19,7 @@ from app.playlist_generator import (
     sort_tracks,
     extract_track_dict,
 )
-from app.gemini_service import batch_score_tracks
+from app.gemini_service import batch_score_tracks, fetch_available_gemini_models, DEFAULT_FREE_MODELS
 from main import app
 
 
@@ -65,13 +66,10 @@ SAMPLE_TRACKS = [
 
 class TestMergeScoring:
     def test_compute_merge_score_components(self):
-        # 100 pop, 10 vibe, 2.0 artist weight -> max possible score = 40 + 40 + 20 = 100
         score = compute_merge_score(popularity=100, artist_weight=2.0, vibe_score=10.0)
         assert pytest.approx(score, 0.01) == 100.0
 
     def test_compute_merge_score_low_vibe(self):
-        # High pop (90), zero vibe (0), normal artist weight (1.0)
-        # Pop: 90 * 0.4 = 36. Vibe: 0. AW: 1.0*50 * 0.2 = 10. Total = 46
         score = compute_merge_score(popularity=90, artist_weight=1.0, vibe_score=0.0)
         assert pytest.approx(score, 0.01) == 46.0
 
@@ -100,8 +98,8 @@ class TestMergePipeline:
         )
         for t in result:
             assert t["popularity"] >= 60
-        assert "t5" not in [t["id"] for t in result]  # 45 pop
-        assert "t7" not in [t["id"] for t in result]  # 20 pop
+        assert "t5" not in [t["id"] for t in result]
+        assert "t7" not in [t["id"] for t in result]
 
     def test_hard_banned_artist_excluded(self):
         weights = {"art_1": 0.0}
@@ -114,7 +112,6 @@ class TestMergePipeline:
         assert all(t["artist_id"] != "art_1" for t in result)
 
     def test_soft_banned_artist_capped(self):
-        # art_1 has 3 tracks (85, 80, 75). With soft ban (0.3), max 2 can pass
         weights = {"art_1": 0.3}
         result = apply_merge_pipeline(
             SAMPLE_TRACKS,
@@ -137,7 +134,7 @@ class TestMergePipeline:
         result_ids = [t["id"] for t in result]
         assert "t1" in result_ids
         assert "t6" in result_ids
-        assert "t4" not in result_ids  # vibe was 2.0 < 6.0
+        assert "t4" not in result_ids
 
 
 # ==============================================================================
@@ -154,8 +151,7 @@ async def test_batch_gemini_scoring_mocked():
     mock_response = MagicMock()
     mock_response.text = '[{"id":"t1","score":9.0},{"id":"t2","score":1.5}]'
 
-    with patch("app.gemini_service.get_settings") as mock_settings:
-        mock_settings.return_value.gemini_api_key = "fake_key"
+    with patch("app.gemini_service.get_effective_gemini_config", return_value=("fake_key", "gemini-2.5-flash")):
         with patch("google.genai.Client") as mock_client_cls:
             mock_client = MagicMock()
             mock_client.models.generate_content.return_value = mock_response
@@ -169,9 +165,7 @@ async def test_batch_gemini_scoring_mocked():
 
 @pytest.mark.asyncio
 async def test_batch_gemini_scoring_fallback():
-    # If API key is empty, should return 5.0 neutral score
-    with patch("app.gemini_service.get_settings") as mock_settings:
-        mock_settings.return_value.gemini_api_key = ""
+    with patch("app.gemini_service.get_effective_gemini_config", return_value=("", "gemini-2.5-flash")):
         scores = await batch_score_tracks(SAMPLE_TRACKS[:2], "Any mood")
         assert scores["t1"] == 5.0
         assert scores["t2"] == 5.0
@@ -225,11 +219,11 @@ class TestPlaylistInspector:
     def test_sort_tracks_artist_weight(self):
         weights = {"art_3": 2.0, "art_1": 1.0, "art_4": 0.2}
         sorted_res = sort_tracks(SAMPLE_TRACKS, sort_by="artist_weight", artist_weights=weights)
-        assert sorted_res[0]["artist_id"] == "art_3"  # weight 2.0
+        assert sorted_res[0]["artist_id"] == "art_3"
 
 
 # ==============================================================================
-# 4. API Endpoints Tests
+# 4. API Endpoints & Settings Tests
 # ==============================================================================
 
 def test_api_merge_playlists_unauthenticated():
@@ -238,7 +232,6 @@ def test_api_merge_playlists_unauthenticated():
         "/api/merge-playlists",
         json={"prompt": "Test Vibe", "playlist_ids": ["pl1", "pl2"]},
     )
-    # Should return 401 when Spotify token is not configured
     assert response.status_code == 401
     assert "Not authenticated" in response.json()["detail"]
 
@@ -259,3 +252,37 @@ def test_api_inspect_filter_unauthenticated():
         json={"playlist_id": "pl123", "min_popularity": 50},
     )
     assert response.status_code == 401
+
+
+def test_api_get_gemini_settings():
+    with TestClient(app) as client:
+        response = client.get("/api/settings/gemini")
+        assert response.status_code == 200
+        data = response.json()
+        assert "has_key" in data
+        assert "selected_model" in data
+        assert "available_models" in data
+        assert len(data["available_models"]) >= 1
+
+
+def test_api_save_gemini_settings():
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/settings/gemini",
+            json={"model": "gemini-2.5-flash-lite"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["selected_model"] == "gemini-2.5-flash-lite"
+
+
+def test_api_list_gemini_models_fallback():
+    with TestClient(app) as client:
+        response = client.get("/api/settings/gemini/models")
+        assert response.status_code == 200
+        data = response.json()
+        assert "models" in data
+        assert data["count"] >= 1
+        model_ids = [m["id"] for m in data["models"]]
+        assert "gemini-2.5-flash" in model_ids
