@@ -25,13 +25,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
-    labels:
-      # Optionale Traefik-Labels (auskommentieren wenn du Traefik nutzt)
-      # - "traefik.enable=true"
-      # - "traefik.http.routers.spotify.rule=Host(`spotify.deine-domain.de`)"
-      # - "traefik.http.routers.spotify.entrypoints=websecure"
-      # - "traefik.http.routers.spotify.tls.certresolver=letsencrypt"
-      # - "traefik.http.services.spotify.loadbalancer.server.port=8000"
 
 volumes:
   spotify_data:
